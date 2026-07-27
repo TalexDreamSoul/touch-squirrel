@@ -1,0 +1,59 @@
+{
+  "id": "tavily-pool",
+  "name": "Tavily Pool",
+  "version": "0.1.0",
+  "description": "Multi-key Tavily pool with rotation, exhausted handling, and HTTP/MCP proxy façade. Behavior reference: https://github.com/IvanLi-CN/tavily-hikari",
+  "kind": ["pool-proxy"],
+  "runtime": "go",
+  "entry": {
+    "go": "bin/tavily-pool"
+  },
+  "hostApi": "0.1",
+  "capabilities": [
+    "http",
+    "proxy",
+    "storage",
+    "secrets",
+    "events",
+    "quota"
+  ],
+  "artifactKinds": [
+    "key.tavily",
+    "token.hikari",
+    "proxy.endpoint"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "upstreamMcp": {
+        "type": "string",
+        "default": "https://mcp.tavily.com/mcp"
+      },
+      "bind": { "type": "string", "default": "127.0.0.1:8791" },
+      "lowQuotaThreshold": { "type": "integer", "default": 15 }
+    },
+    "additionalProperties": true
+  },
+  "ui": {
+    "panels": ["keys", "logs", "settings"]
+  },
+  "reference": {
+    "project": "tavily-hikari",
+    "url": "https://github.com/IvanLi-CN/tavily-hikari",
+    "mvp": [
+      "api key pool + short ids",
+      "LRU / affinity selection",
+      "432 exhausted until period rollover",
+      "HTTP /api/tavily façade",
+      "optional MCP /mcp proxy",
+      "request audit logs"
+    ],
+    "deferred": [
+      "LinuxDo OAuth / credit",
+      "passkey admin",
+      "HA control plane",
+      "full rebalance settlement UI"
+    ]
+  },
+  "source": "in-tree"
+}

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Badge,
   Button,
+  Dialog,
   Input,
   LayerCard,
   Select,
@@ -100,6 +101,7 @@ export default function ClusterPage() {
   const [masters, setMasters] = useState<MasterRow[]>([]);
   const [newMasterURL, setNewMasterURL] = useState("");
   const [newMasterToken, setNewMasterToken] = useState("");
+  const [masterDialog, setMasterDialog] = useState<"create" | "edit" | null>(null);
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [editURL, setEditURL] = useState("");
   const [editToken, setEditToken] = useState("");
@@ -333,6 +335,12 @@ export default function ClusterPage() {
     }
   }
 
+  function openAddMaster() {
+    setNewMasterURL("");
+    setNewMasterToken("");
+    setMasterDialog("create");
+  }
+
   function addMaster() {
     const u = newMasterURL.trim().replace(/\/$/, "");
     if (!u) return;
@@ -350,6 +358,7 @@ export default function ClusterPage() {
     ]);
     setNewMasterURL("");
     setNewMasterToken("");
+    setMasterDialog(null);
     setMasterPage(1);
   }
 
@@ -359,6 +368,7 @@ export default function ClusterPage() {
       setEditIdx(null);
       setEditURL("");
       setEditToken("");
+      setMasterDialog(null);
     }
   }
 
@@ -366,6 +376,7 @@ export default function ClusterPage() {
     setEditIdx(i);
     setEditURL(masters[i]?.url || "");
     setEditToken(""); // re-enter to change; blank keeps
+    setMasterDialog("edit");
   }
 
   function commitEdit() {
@@ -392,6 +403,7 @@ export default function ClusterPage() {
     setEditIdx(null);
     setEditURL("");
     setEditToken("");
+    setMasterDialog(null);
   }
 
   const masterTotalPages = Math.max(
@@ -559,27 +571,14 @@ export default function ClusterPage() {
             主节点列表 <Badge variant="secondary">{masters.length} 条</Badge>
           </LayerCard.Secondary>
           <LayerCard.Primary>
-            <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-              <Input
-                label="主节点 URL"
-                value={newMasterURL}
-                onChange={(e) => setNewMasterURL(e.target.value)}
-                placeholder="https://master.example.com"
-              />
-              <Input
-                label="密码 / 联邦密钥（可选）"
-                type="password"
-                value={newMasterToken}
-                onChange={(e) => setNewMasterToken(e.target.value)}
-                placeholder="空=用全局密钥"
-              />
-              <Button size="sm" onClick={addMaster}>
-                添加
+            <div className="mb-4 flex flex-wrap gap-2">
+              <Button size="sm" onClick={openAddMaster}>
+                添加主节点
               </Button>
             </div>
 
             {masters.length === 0 ? (
-              <Text variant="secondary">暂无主节点 — 填写 URL 与可选密码后添加</Text>
+              <Text variant="secondary">暂无主节点 — 点「添加主节点」填写 URL 与可选密码</Text>
             ) : (
               <div className="flex flex-col gap-2">
                 <div className="grid grid-cols-[1.2fr_1fr_auto] gap-2 border-b border-kumo-hairline pb-2">
@@ -604,92 +603,49 @@ export default function ClusterPage() {
                       className="grid grid-cols-[1.2fr_1fr_auto] items-start gap-2 border-b border-kumo-hairline py-2 last:border-0"
                     >
                       <div className="min-w-0">
-                        {editIdx === i ? (
-                          <Input
-                            value={editURL}
-                            onChange={(e) => setEditURL(e.target.value)}
-                          />
-                        ) : (
-                          <>
-                            <Text size="sm">
-                              <code className="break-all">{row.url}</code>{" "}
-                              {link ? (
-                                <Badge variant={link.ok ? "primary" : "secondary"}>
-                                  {link.ok ? "心跳 ok" : "down"}
-                                </Badge>
-                              ) : (
-                                <Badge variant="secondary">未心跳</Badge>
-                              )}
-                            </Text>
-                            {link ? (
-                              <Text size="xs" variant="secondary">
-                                {link.master_name || ""} need {link.need} · assign{" "}
-                                {link.last_assign}
-                              </Text>
-                            ) : null}
-                          </>
-                        )}
+                        <Text size="sm">
+                          <code className="break-all">{row.url}</code>{" "}
+                          {link ? (
+                            <Badge variant={link.ok ? "primary" : "secondary"}>
+                              {link.ok ? "心跳 ok" : "down"}
+                            </Badge>
+                          ) : (
+                            <Badge variant="secondary">未心跳</Badge>
+                          )}
+                        </Text>
+                        {link ? (
+                          <Text size="xs" variant="secondary">
+                            {link.master_name || ""} need {link.need} · assign{" "}
+                            {link.last_assign}
+                          </Text>
+                        ) : null}
                       </div>
                       <div className="min-w-0">
-                        {editIdx === i ? (
-                          <Input
-                            type="password"
-                            value={editToken}
-                            onChange={(e) => setEditToken(e.target.value)}
-                            placeholder={
-                              row.tokenSet || row.token
-                                ? "已设置 · 留空保持"
-                                : "空=全局密钥"
-                            }
-                          />
-                        ) : (
-                          <Text size="sm">
-                            {row.token ? (
-                              <Badge variant="primary">本次将更新</Badge>
-                            ) : row.tokenSet ? (
-                              <Badge variant="secondary">已设置</Badge>
-                            ) : (
-                              <Badge variant="secondary">用全局</Badge>
-                            )}
-                          </Text>
-                        )}
+                        <Text size="sm">
+                          {row.token ? (
+                            <Badge variant="primary">本次将更新</Badge>
+                          ) : row.tokenSet ? (
+                            <Badge variant="secondary">已设置</Badge>
+                          ) : (
+                            <Badge variant="secondary">用全局</Badge>
+                          )}
+                        </Text>
                       </div>
                       <div className="flex flex-wrap gap-1">
-                        {editIdx === i ? (
-                          <>
-                            <Button size="sm" onClick={commitEdit}>
-                              确定
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => {
-                                setEditIdx(null);
-                                setEditURL("");
-                                setEditToken("");
-                              }}
-                            >
-                              取消
-                            </Button>
-                          </>
-                        ) : (
-                          <>
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => startEdit(i)}
-                            >
-                              编辑
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => removeMaster(i)}
-                            >
-                              删除
-                            </Button>
-                          </>
-                        )}
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => startEdit(i)}
+                        >
+                          编辑
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => removeMaster(i)}
+                        >
+                          删除
+                        </Button>
                       </div>
                     </div>
                   );
@@ -910,6 +866,90 @@ export default function ClusterPage() {
           </LayerCard>
         </div>
       ) : null}
+
+      <Dialog.Root
+        open={masterDialog != null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setMasterDialog(null);
+            setEditIdx(null);
+            setEditURL("");
+            setEditToken("");
+            setNewMasterURL("");
+            setNewMasterToken("");
+          }
+        }}
+      >
+        <Dialog size="base" className="flex max-h-[min(90vh,40rem)] flex-col p-6">
+          <div className="mb-4">
+            <Dialog.Title className="text-xl font-semibold">
+              {masterDialog === "edit" ? "编辑主节点" : "添加主节点"}
+            </Dialog.Title>
+            <Dialog.Description className="mt-1 text-kumo-subtle">
+              从节点连接主节点 URL；密码可选，空则用全局联邦密钥
+            </Dialog.Description>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="flex flex-col gap-3">
+              {masterDialog === "edit" ? (
+                <>
+                  <Input
+                    label="主节点 URL"
+                    value={editURL}
+                    onChange={(e) => setEditURL(e.target.value)}
+                  />
+                  <Input
+                    label="密码 / 联邦密钥"
+                    type="password"
+                    value={editToken}
+                    onChange={(e) => setEditToken(e.target.value)}
+                    placeholder={
+                      editIdx != null &&
+                      (masters[editIdx]?.tokenSet || masters[editIdx]?.token)
+                        ? "已设置 · 留空保持"
+                        : "空=全局密钥"
+                    }
+                  />
+                </>
+              ) : (
+                <>
+                  <Input
+                    label="主节点 URL"
+                    value={newMasterURL}
+                    onChange={(e) => setNewMasterURL(e.target.value)}
+                    placeholder="https://master.example.com"
+                  />
+                  <Input
+                    label="密码 / 联邦密钥（可选）"
+                    type="password"
+                    value={newMasterToken}
+                    onChange={(e) => setNewMasterToken(e.target.value)}
+                    placeholder="空=用全局密钥"
+                  />
+                </>
+              )}
+            </div>
+          </div>
+          <div className="mt-6 flex flex-wrap justify-end gap-2">
+            <Dialog.Close
+              render={(p) => (
+                <Button {...p} size="sm" variant="secondary">
+                  取消
+                </Button>
+              )}
+            />
+            <Button
+              size="sm"
+              onClick={() => {
+                if (masterDialog === "edit") commitEdit();
+                else addMaster();
+              }}
+            >
+              {masterDialog === "edit" ? "保存" : "添加"}
+            </Button>
+          </div>
+        </Dialog>
+      </Dialog.Root>
     </AdminShell>
   );
 }

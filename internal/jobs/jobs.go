@@ -21,6 +21,7 @@ const (
 	StatusQueued    Status = "queued"
 	StatusRunning   Status = "running"
 	StatusCompleted Status = "completed"
+	StatusFailed    Status = "failed"
 	StatusCancelled Status = "cancelled"
 )
 

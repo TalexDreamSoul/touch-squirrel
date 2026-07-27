@@ -1,0 +1,48 @@
+{
+  "id": "xai-accounts",
+  "name": "xAI Accounts",
+  "version": "0.1.0",
+  "description": "Register xAI accounts, capture SSO, run device OAuth, emit CPA-ready artifacts. Go body (current pipeline); JS shell for schema/UI.",
+  "kind": ["registrar"],
+  "runtime": "hybrid",
+  "entry": {
+    "go": "bin/xai-accounts",
+    "js": "ui/index.js"
+  },
+  "hostApi": "0.1",
+  "capabilities": [
+    "email",
+    "turnstile",
+    "browser",
+    "http",
+    "proxy",
+    "storage",
+    "secrets",
+    "events",
+    "quota"
+  ],
+  "artifactKinds": [
+    "account.xai",
+    "session.sso",
+    "oauth.token",
+    "cpa.json"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "target": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 10 },
+      "emailMode": { "type": "string", "enum": ["tempmail", "custom"] },
+      "turnstileProvider": { "type": "string", "enum": ["browser", "lite"] },
+      "probeEnabled": { "type": "boolean", "default": true }
+    },
+    "additionalProperties": true
+  },
+  "ui": {
+    "panels": ["run-console", "settings"]
+  },
+  "source": "in-tree",
+  "legacy": {
+    "cli": "grok start",
+    "homeEnv": "GROK_HOME"
+  }
+}

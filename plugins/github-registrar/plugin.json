@@ -1,0 +1,53 @@
+{
+  "id": "github-registrar",
+  "name": "GitHub 账号注册",
+  "version": "0.1.0",
+  "description": "自动化注册 GitHub 账号（BitBrowser + Playwright + Outlook 邮箱池）",
+  "kind": ["registrar"],
+  "runtime": "bridge",
+  "entry": {
+    "bridge": "runner.py"
+  },
+  "hostApi": "0.1",
+  "capabilities": [
+    "email",
+    "browser",
+    "http",
+    "proxy",
+    "storage",
+    "secrets",
+    "events"
+  ],
+  "artifactKinds": [
+    "account.github",
+    "session.cookie"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "target": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "default": 5,
+        "description": "目标注册数量"
+      },
+      "auto": {
+        "type": "boolean",
+        "default": true,
+        "description": "尝试走完整注册流程（含取 launch code）"
+      },
+      "keepWindows": {
+        "type": "boolean",
+        "default": false,
+        "description": "保留 BitBrowser 窗口供人工排查"
+      }
+    },
+    "additionalProperties": false
+  },
+  "ui": {
+    "panels": ["run-console", "settings"]
+  },
+  "source": "in-tree",
+  "status": "active"
+}

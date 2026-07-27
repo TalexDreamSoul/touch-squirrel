@@ -27,10 +27,10 @@ make docker-rebuild
 
 | 场景 | 命令 | 说明 |
 |------|------|------|
-| 开发机最快 | `make up` | 已有 `grok-panel` 容器则直接复用；否则 clearance + 宿主 `bin/grok panel` |
+| 开发机最快 | `make up` | 已有 `grok-panel` 容器则直接复用；否则 clearance + 宿主 `bin/squirrel panel` |
 | 只要面板不要 Turnstile | `SKIP_TURNSTILE=1 make up` | 上传/导出/巡检可用，注册 mint 可能失败 |
 | 完整容器 | `make docker-up` | WARP+Privoxy+FlareSolverr+panel，数据在 volume `grok-data` |
-| CLI 注册 | `make build && ./bin/grok start -t 10` | 与 panel 共用 `GROK_HOME`（默认 `~/.grok`） |
+| CLI 注册 | `make build && ./bin/squirrel start -t 10` | 与 panel 共用 `GROK_HOME`（默认 `~/.grok`） |
 | UI 开发 | `cd panel && npm run dev` | Next+Kumo 热更；API 指向 `API_PROXY_TARGET`（默认 :8787） |
 
 面板 UI 为 **Next.js + Cloudflare Kumo**（无自写 CSS），`make build` 会先 `panel-ui` 再嵌入 Go 二进制。
@@ -48,11 +48,11 @@ make docker-rebuild
 
 ```bash
 # CLI 速查
-grok start -t 10
-grok status
-grok logs -f
-grok stop
-grok panel     # Web 控制台 :8787
+squirrel start -t 10
+squirrel status
+squirrel logs -f
+squirrel stop
+squirrel panel     # Web 控制台 :8787
 ```
 
 ---
@@ -65,7 +65,7 @@ grok panel     # Web 控制台 :8787
 - 可选探活；可选自动上传到 CPA Management API
 - 内置 Cloudflare 清障 compose（WARP + Privoxy + FlareSolverr）
 - Turnstile：默认 **Playwright + CloakBrowser**（与原 Python 注册机同路径），可选 lite farm
-- **Web 面板**（`grok panel` / Docker，:8787）五个页签一体化：
+- **Web 面板**（`squirrel panel` / Docker，:8787）五个页签一体化：
   - **注册流水线**：启动/停止、进度、实时日志、下载 CPA zip
   - **凭证上传**：多 `.json` / `.zip` / 服务端目录 / 粘贴 JSON → 分批并发上传 CPA，失败重试、本地缓存跳过重复（移植自 cpa-uploader）
   - **批量导出**：筛选远端号池 → 分批下载 → `part-00x.zip` 分卷 + `manifest.json`，支持全量打包下载
@@ -143,13 +143,13 @@ export PATH=$PATH:/usr/local/go/bin
 make build
 sudo make install
 # 安装结果：
-#   /usr/local/bin/grok
+#   /usr/local/bin/squirrel
 #   /usr/local/share/grok-reg/turnstile_mint.py
 
-grok help
+squirrel help
 ```
 
-`sudo make install` 在已有 `bin/grok` 时**不会**再调 `go`（避免 root PATH 里没有 go）。
+`sudo make install` 在已有 `bin/squirrel` 时**不会**再调 `go`（避免 root PATH 里没有 go）。
 
 ### 4. 无头浏览器：Playwright + CloakBrowser（**必做**）
 
@@ -227,7 +227,7 @@ curl -x http://127.0.0.1:40080 -sS -o /dev/null -w '%{http_code}\n' \
 
 ### 6. 配置 `~/.grok/config.env`
 
-首次 `grok start` 会交互生成；也可手动：
+首次 `squirrel start` 会交互生成；也可手动：
 
 ```bash
 sudo mkdir -p /root/.grok
@@ -285,13 +285,13 @@ export GROK_PYTHON=/opt/cloakbrowser-venv/bin/python
 export CLOAKBROWSER_SUPPRESS_FONT_WARNING=1
 
 # 后台跑；目标 N = 探活成功写入 CPA/ 的数量
-grok start -t 10
-grok status
-grok logs -f
-grok stop
+squirrel start -t 10
+squirrel status
+squirrel logs -f
+squirrel stop
 
 # 手动上传最近 run 的 CPA JSON 到 Management API
-grok upload
+squirrel upload
 ```
 
 **数据目录**（`GROK_HOME` 可覆盖，默认 `~/.grok`，root 为 `/root/.grok`）：
@@ -336,8 +336,8 @@ sudo /opt/cloakbrowser-venv/bin/pip install -r scripts/requirements-turnstile.tx
 
 | 命令 | 说明 |
 |------|------|
-| `grok start` | 后台启动，默认目标 10 |
-| `grok start -t N` | 目标 N（1–10000）；**计数 = 探活成功写入 CPA 的数量** |
+| `squirrel start` | 后台启动，默认目标 10 |
+| `squirrel start -t N` | 目标 N（1–10000）；**计数 = 探活成功写入 CPA 的数量** |
 | `grok status` | 未运行 / 运行中 / 错误；进度、线程、当前步骤 |
 | `grok logs` | 最近一次完整日志 |
 | `grok logs -f` | 实时跟踪日志 |
@@ -409,7 +409,7 @@ LITE_SOLVER_URL=http://127.0.0.1:5072
 ### 手动
 
 ```bash
-grok upload
+squirrel upload
 # 列出最近 10 个 outputs/<run_id>/
 # 输入 1 或 1,2,3 多选上传
 ```
@@ -448,7 +448,7 @@ CPA_MANAGEMENT_BASE=http://127.0.0.1:8317/v0/management
 
 ## 号池巡检与自动补号
 
-巡检和补号**随 `grok panel` 进程运行**（面板停则停；Docker compose 中 panel 常驻）。
+巡检和补号**随 `squirrel panel` 进程运行**（面板停则停；Docker compose 中 panel 常驻）。
 
 ### 巡检（PATROL）
 
@@ -547,8 +547,8 @@ CLEANUP_DRY_RUN=1   # 先演练
 ```bash
 export PATH=$PATH:/usr/local/go/bin
 make build
-sudo make install          # 已有 bin/grok 时不再调用 go
-# 或：sudo install -m 755 bin/grok /usr/local/bin/grok
+sudo make install          # 已有 bin/squirrel 时不再调用 go
+# 或：sudo install -m 755 bin/squirrel /usr/local/bin/squirrel
 ```
 
 **`turnstile timeout` / `iframes=0`**
@@ -576,6 +576,6 @@ sudo make install          # 已有 bin/grok 时不再调用 go
 
 ```bash
 go test ./...
-go build -o bin/grok ./cmd/grok
+go build -o bin/squirrel ./cmd/grok
 ```
 

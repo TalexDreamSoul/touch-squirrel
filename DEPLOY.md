@@ -130,7 +130,7 @@ export GROK_PYTHON=$PWD/.venv/bin/python
 export GROK_TURNSTILE_SCRIPT=$PWD/scripts/turnstile_mint.py
 export PANEL_TOKEN=devtoken
 
-./bin/grok panel --addr :8787
+./bin/squirrel panel --addr :8787
 # open http://127.0.0.1:8787
 ```
 

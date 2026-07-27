@@ -77,7 +77,7 @@ export default function SettingsPage() {
     <AdminShell>
       <PageHeader
         title="设置"
-        description="外观 · CPA · 代理 · 巡检 / 补号 / 清理"
+        description="外观 · CPA · 代理 · 巡检 · 通知入口"
         actions={
           <>
             <Button
@@ -120,6 +120,30 @@ export default function SettingsPage() {
               当前生效：{resolved === "dark" ? "深色" : "浅色"}
               {theme === "system" ? "（跟随系统）" : ""}
             </Text>
+          </div>
+        </LayerCard.Primary>
+      </LayerCard>
+
+      <LayerCard className="mb-4">
+        <LayerCard.Secondary>通知</LayerCard.Secondary>
+        <LayerCard.Primary>
+          <div className="flex flex-col gap-3 sm:max-w-xl">
+            <Text>
+              飞书机器人、SMTP 邮件、Webhook 等通知渠道统一在「系统 → 通知」管理，支持列表新建、测试与事件订阅。
+            </Text>
+            <Text size="xs" variant="secondary">
+              典型用途：注册完成/失败推送、号池不足告警、巡检失败提醒。密钥仅存本机 notifications.json。
+            </Text>
+            <div>
+              <Button
+                size="sm"
+                onClick={() => {
+                  window.location.href = "/notifications/";
+                }}
+              >
+                打开通知渠道
+              </Button>
+            </div>
           </div>
         </LayerCard.Primary>
       </LayerCard>

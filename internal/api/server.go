@@ -16,15 +16,20 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/grok-free-register/grok-reg/internal/acctpool"
+	"github.com/grok-free-register/grok-reg/internal/bridge"
 	"github.com/grok-free-register/grok-reg/internal/cluster"
 	"github.com/grok-free-register/grok-reg/internal/config"
 	"github.com/grok-free-register/grok-reg/internal/cpa"
 	"github.com/grok-free-register/grok-reg/internal/daemon"
 	"github.com/grok-free-register/grok-reg/internal/home"
+	"github.com/grok-free-register/grok-reg/internal/jobs"
 	"github.com/grok-free-register/grok-reg/internal/localpool"
 	"github.com/grok-free-register/grok-reg/internal/patrol"
+	"github.com/grok-free-register/grok-reg/internal/plugin"
 	"github.com/grok-free-register/grok-reg/internal/state"
 	"github.com/grok-free-register/grok-reg/internal/statuspage"
+	"github.com/grok-free-register/grok-reg/internal/tavilypool"
 	"github.com/grok-free-register/grok-reg/internal/transfer"
 )
 
@@ -37,13 +42,14 @@ type Options struct {
 }
 
 type Server struct {
-	opt      Options
-	mux      *http.ServeMux
-	transfer *transfer.Service
-	patrol   *patrol.Service
-	cluster  *cluster.Service
-	status   *statuspage.Service
+	opt       Options
+	mux       *http.ServeMux
+	transfer  *transfer.Service
+	patrol    *patrol.Service
+	cluster   *cluster.Service
+	status    *statuspage.Service
 	localPool *localpool.Service
+	accounts  *acctpool.Store
 }
 
 func New(opt Options) *Server {
@@ -113,15 +119,23 @@ func New(opt Options) *Server {
 	s.status.SetClusterSnap(func() map[string]any {
 		st := s.cluster.Status()
 		return map[string]any{
-			"role": st.Role,
-			"need": st.Need,
-			"pool_target": st.PoolTarget,
+			"role":          st.Role,
+			"need":          st.Need,
+			"pool_target":   st.PoolTarget,
 			"slaves_online": len(filterOnline(st.Nodes)),
-			"slaves_total": len(st.Nodes),
-			"nodes": st.Nodes,
+			"slaves_total":  len(st.Nodes),
+			"nodes":         st.Nodes,
 		}
 	})
 	s.localPool = localpool.New(opt.Paths.LocalPool)
+	if st, err := acctpool.Open(opt.Paths.AccountsDB); err == nil {
+		s.accounts = st
+		// one-shot auto-migration of legacy local-pool + tavily keys
+		_, _ = st.AutoMigrate(acctpool.MigrateOptions{
+			LocalPoolDir:   opt.Paths.LocalPool,
+			TavilyKeysPath: tavilypool.DefaultStatePath(opt.Paths.Root),
+		})
+	}
 	s.routes()
 	return s
 }
@@ -257,6 +271,22 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/local-pool/import", s.handleLocalPoolImport)
 	s.mux.HandleFunc("POST /api/local-pool/sync", s.handleLocalPoolSync)
 
+	// touch-squirrel host: plugins / artifacts / tavily key pool / notifications
+	s.mux.HandleFunc("GET /api/plugins", s.handlePluginsList)
+	s.mux.HandleFunc("POST /api/plugins/{id}/enable", s.handlePluginEnable)
+	s.mux.HandleFunc("POST /api/plugins/{id}/disable", s.handlePluginDisable)
+	s.mux.HandleFunc("GET /api/artifacts", s.handleArtifactsList)
+	s.mux.HandleFunc("GET /api/tavily/keys", s.handleTavilyKeysList)
+	s.mux.HandleFunc("POST /api/tavily/keys", s.handleTavilyKeysAdd)
+	s.mux.HandleFunc("POST /api/tavily/keys/{id}/status", s.handleTavilyKeyStatus)
+
+	// host notifications (feishu / smtp / webhook)
+	s.mux.HandleFunc("GET /api/notifications", s.handleNotifyList)
+	s.mux.HandleFunc("POST /api/notifications", s.handleNotifyCreate)
+	s.mux.HandleFunc("PUT /api/notifications/{id}", s.handleNotifyUpdate)
+	s.mux.HandleFunc("DELETE /api/notifications/{id}", s.handleNotifyDelete)
+	s.mux.HandleFunc("POST /api/notifications/{id}/test", s.handleNotifyTest)
+
 	if s.opt.WebFS != nil {
 		// Next export lives under out/ inside embed.FS
 		staticRoot := s.opt.WebFS
@@ -299,7 +329,7 @@ func (s *Server) routes() {
 	} else {
 		s.mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			_, _ = w.Write([]byte("grok-panel API up. Mount web assets or open /api/health\n"))
+			_, _ = w.Write([]byte("touch-squirrel panel API up. Mount web assets or open /api/health\n"))
 		})
 	}
 }
@@ -364,7 +394,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	exTotal, exRunning := s.transfer.ExportJobs.Counts()
 	writeJSON(w, 200, map[string]any{
 		"ok":      true,
-		"service": "grok-panel",
+		"service": "touch-squirrel-panel",
 		"time":    time.Now().UTC().Format(time.RFC3339),
 		"auth":    s.opt.Token != "",
 		"jobs": map[string]any{
@@ -417,7 +447,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 type startReq struct {
-	Target int `json:"target"`
+	Target int    `json:"target"`
+	Plugin string `json:"plugin"` // registrar plugin id; default xai-accounts
+	Type   string `json:"type"`   // account type alias: xai|tavily
 }
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
@@ -435,6 +467,69 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	pluginID := strings.TrimSpace(req.Plugin)
+	if pluginID == "" {
+		switch strings.ToLower(strings.TrimSpace(req.Type)) {
+		case "tavily", "tavily-registrar":
+			pluginID = "tavily-registrar"
+		case "xai", "xai-accounts", "":
+			pluginID = "xai-accounts"
+		default:
+			pluginID = strings.TrimSpace(req.Type)
+		}
+	}
+	if pluginID == "" {
+		pluginID = "xai-accounts"
+	}
+
+	// Resolve plugin manifest and dispatch by runtime.
+	mgr := plugin.NewManager(s.opt.Paths.PluginsDir, s.opt.Paths.EnabledFile, plugin.ResolveInTreeRoot())
+	it, err := mgr.Get(pluginID)
+	if err != nil {
+		writeJSON(w, 400, map[string]any{
+			"ok":     false,
+			"error":  fmt.Sprintf("插件 %s 未找到", pluginID),
+			"plugin": pluginID,
+		})
+		return
+	}
+	if !it.Enabled {
+		writeJSON(w, 400, map[string]any{
+			"ok":     false,
+			"error":  fmt.Sprintf("插件 %s 未启用", pluginID),
+			"plugin": pluginID,
+		})
+		return
+	}
+	if !it.Manifest.HasKind(plugin.KindRegistrar) {
+		writeJSON(w, 400, map[string]any{
+			"ok":     false,
+			"error":  fmt.Sprintf("插件 %s 不是 registrar", pluginID),
+			"plugin": pluginID,
+		})
+		return
+	}
+
+	switch pluginID {
+	case "xai-accounts":
+		s.handleXAIStart(w, r, target, pluginID)
+		return
+	default:
+		if it.Manifest.Runtime == plugin.RuntimeBridge && it.Manifest.Entry.Bridge != "" {
+			s.handleBridgeStart(w, r, target, pluginID, it)
+			return
+		}
+		writeJSON(w, 400, map[string]any{
+			"ok":     false,
+			"error":  fmt.Sprintf("注册类型 %s 暂未接入流水线（runtime=%s）", pluginID, it.Manifest.Runtime),
+			"plugin": pluginID,
+		})
+		return
+	}
+}
+
+// handleXAIStart starts the legacy xai-accounts pipeline (backward compat).
+func (s *Server) handleXAIStart(w http.ResponseWriter, r *http.Request, target int, pluginID string) {
 	runID, pid, logPath, err := s.ensurePipelineStart(target)
 	if err != nil {
 		code := 500
@@ -444,14 +539,75 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-
 	writeJSON(w, 200, map[string]any{
 		"ok":     true,
 		"run_id": runID,
 		"pid":    pid,
 		"target": target,
+		"plugin": pluginID,
+		"type":   "xai",
 		"log":    logPath,
 		"output": filepath.Join(s.opt.Paths.Outputs, runID),
+	})
+}
+
+// handleBridgeStart starts a bridge-type plugin subprocess as a tracked job.
+func (s *Server) handleBridgeStart(w http.ResponseWriter, r *http.Request, target int, pluginID string, it plugin.Installed) {
+	if pip, err := daemon.ReadPID(s.opt.Paths.PID); err == nil && daemon.PIDAlive(pip) {
+		writeJSON(w, 409, map[string]any{"ok": false, "error": fmt.Sprintf("已有注册任务运行中 (pid %d)", pip)})
+		return
+	}
+
+	runID := home.NewRunID()
+	outputDir := filepath.Join(s.opt.Paths.Outputs, runID)
+	logPath := filepath.Join(s.opt.Paths.LogsDir, fmt.Sprintf("run-%s.log", runID))
+	_ = os.MkdirAll(s.opt.Paths.LogsDir, 0o700)
+
+	bridgePath := filepath.Join(it.Root, it.Manifest.Entry.Bridge)
+
+	// Build env: inherit host config for BitBrowser, Clash, captcha keys.
+	cfg, _ := config.Load(s.opt.Paths.Config)
+	bridgeEnv := map[string]string{
+		"OUTLOOK_POOL_DIR": filepath.Join(s.opt.Paths.Root, "_outlook_pool"),
+	}
+	if cfg.CPAManagementKey != "" {
+		bridgeEnv["CPA_MGMT_KEY"] = cfg.CPAManagementKey
+	}
+	// Pass through common captcha envs.
+	for _, k := range []string{
+		"YESCAPTCHA_API_KEY", "YESCAPTCHA_API_BASE",
+		"CAPSOLVER_API_KEY", "EZCAPTCHA_API_KEY", "EZCAPTCHA_API_BASE",
+		"BITBROWSER_API", "CLASH_PROXY", "CLASH_SECRET", "CLASH_API",
+		"FINGERPRINT_BROWSER",
+	} {
+		if v := os.Getenv(k); v != "" {
+			bridgeEnv[k] = v
+		}
+	}
+
+	// Spawn bridge as a tracked background job.
+	bridgeMgr := jobs.NewManager(pluginID, 24*time.Hour)
+	go func() {
+		bridge.Run(context.Background(), bridgeMgr, bridge.Config{
+			PluginID:    pluginID,
+			BridgePath:  bridgePath,
+			PythonExe:   os.Getenv("GROK_PYTHON"),
+			Target:      target,
+			PluginCfg:   map[string]any{"auto": true},
+			Env:         bridgeEnv,
+			OutputDir:   outputDir,
+			ArtifactDir: filepath.Join(s.opt.Paths.Root, "artifacts"),
+		})
+	}()
+
+	writeJSON(w, 200, map[string]any{
+		"ok":     true,
+		"run_id": runID,
+		"target": target,
+		"plugin": pluginID,
+		"type":   "github",
+		"log":    logPath,
+		"output": outputDir,
 	})
 }
 
@@ -668,11 +824,11 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, 200, map[string]any{
-		"ok":         true,
-		"runs":       out,
-		"total":      total,
-		"page":       page,
-		"page_size":  pageSize,
+		"ok":          true,
+		"runs":        out,
+		"total":       total,
+		"page":        page,
+		"page_size":   pageSize,
 		"total_pages": pageCount(total, pageSize),
 	})
 }
@@ -842,8 +998,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"cluster_assign_max":           cfg.ClusterAssignMax,
 		"cluster_auto_register":        cfg.ClusterAutoRegister,
 		"cluster_auto_upload":          cfg.ClusterAutoUpload,
-		"cluster_share_pool_list":       cfg.ClusterSharePoolList,
-		"cluster_share_pool_pull":       cfg.ClusterSharePoolPull,
+		"cluster_share_pool_list":      cfg.ClusterSharePoolList,
+		"cluster_share_pool_pull":      cfg.ClusterSharePoolPull,
 		"local_pool_auto_import":       cfg.LocalPoolAutoImport,
 		"local_pool_auto_sync":         cfg.LocalPoolAutoSync,
 	}
@@ -1187,7 +1343,6 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 // Shutdown helper for tests.
 func IdleContext() context.Context { return context.Background() }
 
-
 func contentTypeFor(path string) string {
 	switch {
 	case strings.HasSuffix(path, ".html"):
@@ -1241,7 +1396,6 @@ func pageCount(total, pageSize int) int {
 	}
 	return (total + pageSize - 1) / pageSize
 }
-
 
 func maskMasterURLsString(cfg config.Config) string {
 	eps := cfg.ClusterMasterEndpoints()

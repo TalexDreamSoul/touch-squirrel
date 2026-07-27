@@ -58,6 +58,7 @@ func (s *Server) handleLocalPoolImport(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
+		s.indexLocalEntries(entries)
 		if s.shouldAutoSync() {
 			go s.syncLocalPool(false)
 		}
@@ -78,6 +79,7 @@ func (s *Server) handleLocalPoolImport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
+	s.indexLocalEntries(entries)
 	if s.shouldAutoSync() {
 		go s.syncLocalPool(false)
 	}
@@ -162,6 +164,10 @@ func (s *Server) syncLocalPool(all bool) (okN, failN, total int, samples []strin
 		}
 	}
 	_ = s.localPool.MarkSynced(okNames, cfg.CPAManagementBase, nil)
+	// reindex so synced_at lands in unified accounts
+	if s.accounts != nil {
+		_, _ = s.accounts.UpsertLocalFromDir(s.opt.Paths.LocalPool)
+	}
 	return okN, failN, total, samples
 }
 
@@ -171,14 +177,28 @@ func (s *Server) autoImportLatestRun(runID string) {
 	if err != nil || !cfg.LocalPoolAutoImport {
 		return
 	}
+	var entries []localpool.Entry
 	if runID != "" {
 		if dir, err := s.resolveRun(runID); err == nil {
-			_, _, _ = s.localPool.ImportRun(dir)
+			_, entries, _ = s.localPool.ImportRun(dir)
 		}
 	} else {
-		_, _, _, _ = s.localPool.ImportLatest(s.opt.Paths.Outputs, 3)
+		_, _, entries, _ = s.localPool.ImportLatest(s.opt.Paths.Outputs, 3)
 	}
+	s.indexLocalEntries(entries)
 	if cfg.LocalPoolAutoSync {
 		go s.syncLocalPool(false)
 	}
+}
+
+func (s *Server) indexLocalEntries(entries []localpool.Entry) {
+	if s.accounts == nil {
+		return
+	}
+	if len(entries) > 0 {
+		_, _ = s.accounts.UpsertLocalEntries(s.opt.Paths.LocalPool, entries)
+		return
+	}
+	// fallback full reindex when caller didn't return entries
+	_, _ = s.accounts.UpsertLocalFromDir(s.opt.Paths.LocalPool)
 }

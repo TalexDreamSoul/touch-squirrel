@@ -1,4 +1,4 @@
-APP=grok
+APP=squirrel
 MODULE=github.com/grok-free-register/grok-reg
 VERSION?=0.2.0-panel
 PREFIX?=/usr/local
@@ -19,7 +19,7 @@ ifeq ($(GO),)
 endif
 
 help:
-	@echo "touch-xai-register / grok"
+	@echo "touch-xai-register / squirrel (touch-squirrel host)"
 	@echo ""
 	@echo "本机最快启动:"
 	@echo "  make up              # clearance(Docker) + 宿主 panel，或复用已在跑的全家桶"
@@ -29,7 +29,7 @@ help:
 	@echo ""
 	@echo "开发:"
 	@echo "  make panel-ui        # 构建 Next+Kumo → web/out"
-	@echo "  make build           # panel-ui + 编译 bin/grok"
+	@echo "  make build           # panel-ui + 编译 bin/squirrel"
 	@echo "  make panel           # 前台跑 panel（:8787）"
 	@echo "  make test            # go test ./..."
 	@echo ""
@@ -39,7 +39,7 @@ help:
 	@echo "  make docker-down     # compose down"
 	@echo ""
 	@echo "安装:"
-	@echo "  make install         # 装到 $(BINDIR)/grok"
+	@echo "  make install         # 装到 $(BINDIR)/squirrel"
 # build embeds web/out; run `make panel-ui` when UI changes
 build:
 	@if [ ! -f web/out/index.html ]; then \
@@ -70,7 +70,7 @@ panel-ui:
 	@echo "[✓] web/out ready"
 
 panel: build
-	@echo "PANEL_TOKEN=$${PANEL_TOKEN:-} GROK_HOME=$${GROK_HOME:-$$HOME/.grok}"
+	@echo "PANEL_TOKEN=$${PANEL_TOKEN:-} SQUIRREL_HOME=$${SQUIRREL_HOME:-$$HOME/.touch-squirrel}"
 	./bin/$(APP) panel
 
 # 本机一键：优先 scripts/local-up.sh
@@ -101,7 +101,7 @@ docker-rebuild:
 docker-down:
 	COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME:-grok-register} docker compose down
 
-# 不强制 rebuild：已有 bin/grok 时直接安装（避免 sudo 丢 PATH 再编一次失败）
+# 不强制 rebuild：已有 bin/squirrel 时直接安装（避免 sudo 丢 PATH 再编一次失败）
 install:
 	@if [ ! -x bin/$(APP) ]; then \
 		echo "[*] bin/$(APP) 不存在，先 build..."; \
@@ -114,7 +114,7 @@ install:
 	install -m 755 scripts/turnstile_mint.py /usr/local/share/grok-reg/turnstile_mint.py
 	@echo "installed: $(BINDIR)/$(APP)"
 	@echo "installed: /usr/local/share/grok-reg/turnstile_mint.py"
-	@echo "try: grok help"
+	@echo "try: squirrel help"
 	@echo "Turnstile: pip install -r scripts/requirements-turnstile.txt && python -m cloakbrowser install"
 
 uninstall:

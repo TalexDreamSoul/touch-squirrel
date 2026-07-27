@@ -24,6 +24,20 @@ type LocalPoolItem = {
   sync_error?: string;
 };
 
+type AccountItem = {
+  id: string;
+  type: string;
+  plugin: string;
+  label: string;
+  status: string;
+  email?: string;
+  external_id?: string;
+  source?: string;
+  run_id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 type CloudPoolItem = {
   name: string;
   provider?: string;
@@ -59,7 +73,7 @@ type Overview = {
   };
 };
 
-type PoolSource = "local" | "cloud" | "federation";
+type PoolSource = "accounts" | "local" | "cloud" | "federation";
 type TabKey = "list" | "patrol";
 
 const PAGE_SIZE = 10;
@@ -119,10 +133,14 @@ function Pager({
 
 export default function PoolPage() {
   const [tab, setTab] = useState<TabKey>("list");
-  const [poolSource, setPoolSource] = useState<PoolSource>("local");
+  const [poolSource, setPoolSource] = useState<PoolSource>("accounts");
+  const [accountType, setAccountType] = useState<string>("all");
   const [masterURL, setMasterURL] = useState("");
   const [masters, setMasters] = useState<string[]>([]);
   const [localItems, setLocalItems] = useState<LocalPoolItem[]>([]);
+  const [accountItems, setAccountItems] = useState<AccountItem[]>([]);
+  const [typeCounts, setTypeCounts] = useState<Record<string, number>>({});
+  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [cloudItems, setCloudItems] = useState<CloudPoolItem[]>([]);
   const [poolTotal, setPoolTotal] = useState(0);
   const [poolTotalPages, setPoolTotalPages] = useState(0);
@@ -162,9 +180,35 @@ export default function PoolPage() {
   }, []);
 
   const refreshPool = useCallback(
-    async (page: number, source: PoolSource, master: string) => {
+    async (page: number, source: PoolSource, master: string, typeFilter: string) => {
       setPoolError("");
       try {
+        if (source === "accounts") {
+          const qs = new URLSearchParams({
+            source: "accounts",
+            page: String(page),
+            limit: String(PAGE_SIZE),
+          });
+          if (typeFilter && typeFilter !== "all") qs.set("type", typeFilter);
+          const ap = await api<{
+            items?: AccountItem[];
+            total?: number;
+            total_pages?: number;
+            by_type?: Record<string, number>;
+            types?: string[];
+          }>(`/api/pool/list?${qs.toString()}`);
+          setAccountItems(ap.items || []);
+          setLocalItems([]);
+          setCloudItems([]);
+          setPoolTotal(ap.total || 0);
+          setPoolUnsynced(0);
+          setPoolTotalPages(ap.total_pages || 0);
+          setTypeCounts(ap.by_type || {});
+          setAvailableTypes(ap.types || Object.keys(ap.by_type || {}));
+          setFedCanPull(false);
+          setFedShareList(true);
+          return;
+        }
         if (source === "local") {
           const lp = await api<{
             items?: LocalPoolItem[];
@@ -173,6 +217,7 @@ export default function PoolPage() {
             total_pages?: number;
           }>(`/api/pool/list?source=local&page=${page}&limit=${PAGE_SIZE}`);
           setLocalItems(lp.items || []);
+          setAccountItems([]);
           setCloudItems([]);
           setPoolTotal(lp.total || 0);
           setPoolUnsynced(lp.unsynced || 0);
@@ -190,6 +235,7 @@ export default function PoolPage() {
           }>(`/api/pool/list?source=cloud&page=${page}&limit=${PAGE_SIZE}`);
           setCloudItems(cp.files || []);
           setLocalItems([]);
+          setAccountItems([]);
           setPoolTotal(cp.total || 0);
           setPoolTotalPages(cp.total_pages || 0);
           setPoolUnsynced(0);
@@ -199,6 +245,7 @@ export default function PoolPage() {
         }
         if (!master) {
           setLocalItems([]);
+          setAccountItems([]);
           setCloudItems([]);
           setPoolTotal(0);
           setPoolTotalPages(0);
@@ -216,6 +263,7 @@ export default function PoolPage() {
         );
         setCloudItems(fp.files || []);
         setLocalItems([]);
+        setAccountItems([]);
         setPoolTotal(fp.total || 0);
         setPoolTotalPages(fp.total_pages || 0);
         setPoolUnsynced(0);
@@ -223,6 +271,7 @@ export default function PoolPage() {
         setFedCanPull(!!fp.share_pool_pull);
       } catch (e) {
         setLocalItems([]);
+        setAccountItems([]);
         setCloudItems([]);
         setPoolTotal(0);
         setPoolTotalPages(0);
@@ -247,8 +296,8 @@ export default function PoolPage() {
 
   useEffect(() => {
     if (tab !== "list") return;
-    void refreshPool(poolPage, poolSource, masterURL);
-  }, [tab, poolPage, poolSource, masterURL, refreshPool]);
+    void refreshPool(poolPage, poolSource, masterURL, accountType);
+  }, [tab, poolPage, poolSource, masterURL, accountType, refreshPool]);
 
   useEffect(() => {
     if (tab !== "patrol") return;
@@ -267,7 +316,7 @@ export default function PoolPage() {
       setMsg(
         `同步完成：成功 ${d.synced ?? 0} / 失败 ${d.failed ?? 0}（共 ${d.total ?? 0}）`,
       );
-      await refreshPool(poolPage, "local", masterURL);
+      await refreshPool(poolPage, "local", masterURL, accountType);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "同步失败");
     } finally {
@@ -285,7 +334,7 @@ export default function PoolPage() {
       setMsg(`已入库 ${d.added ?? 0} 个（run ${d.run_id || "latest"}）`);
       setPoolSource("local");
       setPoolPage(1);
-      await refreshPool(1, "local", masterURL);
+      await refreshPool(1, "local", masterURL, accountType);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "入库失败");
     } finally {
@@ -355,7 +404,7 @@ export default function PoolPage() {
     <AdminShell>
       <PageHeader
         title="号池"
-        description="本地 · 云端 CPA · 联邦主节点 · 巡检"
+        description="统一账号 · 本地 · 云端 CPA · 联邦 · 巡检"
         actions={
           tab === "list" ? (
             <>
@@ -429,7 +478,7 @@ export default function PoolPage() {
             <Button
               size="sm"
               variant="secondary"
-              onClick={() => void refreshPool(poolPage, poolSource, masterURL)}
+              onClick={() => void refreshPool(poolPage, poolSource, masterURL, accountType)}
             >
               刷新
             </Button>
@@ -446,11 +495,41 @@ export default function PoolPage() {
                     setPoolPage(1);
                   }}
                 >
-                  <Select.Option value="local">本地号池</Select.Option>
+                  <Select.Option value="accounts">统一号池</Select.Option>
+                  <Select.Option value="local">本地 xAI 文件</Select.Option>
                   <Select.Option value="cloud">云端 CPA</Select.Option>
                   <Select.Option value="federation">联邦主节点</Select.Option>
                 </Select>
               </div>
+              {poolSource === "accounts" ? (
+                <div className="min-w-[160px]">
+                  <Select
+                    label="账号类型"
+                    value={accountType}
+                    onValueChange={(v) => {
+                      if (!v) return;
+                      setAccountType(v);
+                      setPoolPage(1);
+                    }}
+                  >
+                    <Select.Option value="all">
+                      全部
+                      {Object.keys(typeCounts).length
+                        ? ` (${Object.values(typeCounts).reduce((a, b) => a + b, 0)})`
+                        : ""}
+                    </Select.Option>
+                    {(availableTypes.length
+                      ? availableTypes
+                      : ["xai", "tavily"]
+                    ).map((t) => (
+                      <Select.Option key={t} value={t}>
+                        {t}
+                        {typeCounts[t] != null ? ` (${typeCounts[t]})` : ""}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </div>
+              ) : null}
               {poolSource === "federation" ? (
                 <div className="min-w-[260px] flex-1">
                   {masters.length > 0 ? (
@@ -505,6 +584,35 @@ export default function PoolPage() {
 
             {poolError ? (
               <Text variant="secondary">{poolError}</Text>
+            ) : poolSource === "accounts" ? (
+              accountItems.length === 0 ? (
+                <Text variant="secondary">
+                  统一号池为空 — 启动 panel 时会自动迁移 local-pool 与 Tavily keys
+                </Text>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {accountItems.map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex flex-wrap items-center justify-between gap-2 border-b border-kumo-hairline pb-2 last:border-0"
+                    >
+                      <div className="min-w-0">
+                        <Text size="sm">
+                          {p.label || p.email || p.external_id || p.id}{" "}
+                          <Badge variant="primary">{p.type}</Badge>{" "}
+                          <Badge variant="secondary">{p.status}</Badge>
+                        </Text>
+                        <Text size="xs" variant="secondary">
+                          {p.plugin}
+                          {p.external_id ? ` · ${p.external_id}` : ""}
+                          {p.run_id ? ` · run ${p.run_id}` : ""}
+                          {p.source ? ` · ${p.source}` : ""}
+                        </Text>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
             ) : poolSource === "local" ? (
               localItems.length === 0 ? (
                 <Text variant="secondary">
@@ -583,11 +691,13 @@ export default function PoolPage() {
               totalPages={poolTotalPages}
               total={poolTotal}
               label={
-                poolSource === "local"
-                  ? "本地号池"
-                  : poolSource === "cloud"
-                    ? "云端 CPA"
-                    : "联邦号池"
+                poolSource === "accounts"
+                  ? "统一号池"
+                  : poolSource === "local"
+                    ? "本地 xAI"
+                    : poolSource === "cloud"
+                      ? "云端 CPA"
+                      : "联邦号池"
               }
               onChange={setPoolPage}
             />

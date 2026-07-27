@@ -29,7 +29,7 @@ export default function LoginPage() {
   return (
     <Surface className="flex min-h-screen items-center justify-center p-6">
       <LayerCard className="w-full max-w-md">
-        <LayerCard.Secondary>Grok Panel</LayerCard.Secondary>
+        <LayerCard.Secondary>touch-squirrel</LayerCard.Secondary>
         <LayerCard.Primary>
           <form className="flex flex-col gap-4" onSubmit={onSubmit}>
             <Text variant="heading3" as="h3">面板登录</Text>

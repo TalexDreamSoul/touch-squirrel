@@ -70,12 +70,22 @@ export type RunStatus = {
   status?: string;
   run_id?: string;
   target?: number;
+  done?: number;
   success?: number;
   fail?: number;
+  fail_count?: number;
+  sso_count?: number;
+  oauth_count?: number;
   phase?: string;
   phase_detail?: string;
   pid?: number;
   log_path?: string;
+  output_dir?: string;
+  started_at?: string;
+  updated_at?: string;
+  error?: string;
+  rate_per_min?: number;
+  workers?: { s?: number; p?: number; c?: number; oauth?: number };
 };
 
 export type ClusterNode = {
@@ -136,3 +146,40 @@ export type ClusterStatus = {
 };
 
 export type PanelConfig = Record<string, string | number | boolean | null | undefined>;
+
+export type PluginInfo = {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  runtime: string;
+  kind?: string[];
+  enabled: boolean;
+  source: string;
+  path?: string;
+  capabilities?: string[];
+  artifact_kinds?: string[];
+  status?: string;
+};
+
+export type ArtifactInfo = {
+  id: string;
+  plugin: string;
+  kind: string;
+  status: string;
+  labels?: Record<string, string>;
+  run_id?: string;
+  created_at: string;
+  updated_at?: string;
+};
+
+export type TavilyKeyInfo = {
+  id: string;
+  api_key: string;
+  status: string;
+  note?: string;
+  success?: number;
+  failure?: number;
+  last_used_unix?: number;
+  created_at?: string;
+};

@@ -39,4 +39,4 @@ if [[ -n "${HTTP_PROXY:-}" ]]; then export http_proxy="$HTTP_PROXY"; fi
 if [[ -n "${HTTPS_PROXY:-}" ]]; then export https_proxy="$HTTPS_PROXY"; fi
 if [[ -n "${NO_PROXY:-}" ]]; then export no_proxy="$NO_PROXY"; fi
 
-exec /usr/local/bin/grok "$@"
+exec /usr/local/bin/squirrel "$@"

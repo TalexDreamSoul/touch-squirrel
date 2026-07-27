@@ -1,0 +1,40 @@
+{
+  "id": "tavily-registrar",
+  "name": "Tavily Registrar",
+  "version": "0.1.0",
+  "description": "Shell plugin for automated Tavily key/account acquisition. Separate from tavily-pool. Implementation pending real registration flow.",
+  "kind": ["registrar"],
+  "runtime": "go",
+  "entry": {
+    "go": "bin/tavily-registrar"
+  },
+  "hostApi": "0.1",
+  "capabilities": [
+    "http",
+    "email",
+    "browser",
+    "storage",
+    "secrets",
+    "events"
+  ],
+  "artifactKinds": [
+    "key.tavily",
+    "account.tavily"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "target": { "type": "integer", "minimum": 1, "default": 1 }
+    },
+    "additionalProperties": true
+  },
+  "ui": {
+    "panels": ["run-console", "settings"]
+  },
+  "status": "shell",
+  "source": "in-tree",
+  "notes": [
+    "Do not merge with tavily-pool.",
+    "Produced key artifacts should be ingestible by tavily-pool."
+  ]
+}

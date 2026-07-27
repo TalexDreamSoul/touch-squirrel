@@ -6,7 +6,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=0.2.0-panel" -o /out/grok ./cmd/grok
+RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=0.2.0-panel" -o /out/squirrel ./cmd/grok
 
 # ── runtime: panel + worker + turnstile browser ────────────────
 # Mirror: docker.m.daocloud.io/library/python:3.12-bookworm
@@ -38,10 +38,10 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/python -m cloakbrowser install \
     && rm -f /tmp/requirements-turnstile.txt
 
-COPY --from=build /out/grok /usr/local/bin/grok
+COPY --from=build /out/squirrel /usr/local/bin/squirrel
 COPY scripts/turnstile_mint.py /opt/grok/turnstile_mint.py
 COPY config.env.example /opt/grok/config.env.example
-RUN chmod 755 /usr/local/bin/grok /opt/grok/turnstile_mint.py \
+RUN chmod 755 /usr/local/bin/squirrel /opt/grok/turnstile_mint.py \
     && mkdir -p /data
 
 # Docker-oriented default config (service DNS names)

@@ -2,6 +2,8 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import {
+  ArchiveIcon,
+  BellIcon,
   BroadcastIcon,
   CloudArrowUpIcon,
   DownloadSimpleIcon,
@@ -9,6 +11,7 @@ import {
   HouseIcon,
   NetworkIcon,
   PlayCircleIcon,
+  PlugsIcon,
   SignOutIcon,
   StackIcon,
 } from "@phosphor-icons/react";
@@ -42,6 +45,13 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
+    label: "Host",
+    items: [
+      { href: "/plugins", label: "插件", icon: PlugsIcon },
+      { href: "/artifacts", label: "囤货", icon: ArchiveIcon },
+    ],
+  },
+  {
     label: "凭证",
     items: [
       { href: "/upload", label: "上传", icon: CloudArrowUpIcon },
@@ -57,12 +67,15 @@ const navGroups: NavGroup[] = [
     label: "状态页",
     items: [
       { href: "/status", label: "公开看板", icon: BroadcastIcon },
-      { href: "/status-admin", label: "看板配置", icon: GearIcon },
+      { href: "/status-admin", label: "看板设置", icon: GearIcon },
     ],
   },
   {
     label: "系统",
-    items: [{ href: "/settings", label: "设置", icon: GearIcon }],
+    items: [
+      { href: "/notifications", label: "通知", icon: BellIcon },
+      { href: "/settings", label: "设置", icon: GearIcon },
+    ],
   },
 ];
 
@@ -92,15 +105,21 @@ export function AdminShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <Sidebar.Provider defaultOpen className="min-h-screen">
+    <Sidebar.Provider
+      defaultOpen
+      defaultWidth={248}
+      minWidth={220}
+      maxWidth={320}
+      className="min-h-screen"
+    >
       <Sidebar className="flex h-screen flex-col">
         <Sidebar.Header className="!flex !w-full !items-center !justify-between !gap-2">
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 overflow-hidden">
             <Text variant="heading3" as="span">
-              Grok Panel
+              touch-squirrel
             </Text>
             <Text variant="secondary" size="xs">
-              注册 · CPA · 状态
+              插件 · 注册 · 号池
             </Text>
           </div>
           <Sidebar.Trigger className="shrink-0" />
@@ -123,6 +142,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
                         icon={item.icon}
                         active={active}
                         onClick={() => router.push(item.href)}
+                        title={item.label}
+                        className="!whitespace-nowrap"
                       >
                         {item.label}
                       </Sidebar.MenuButton>

@@ -58,17 +58,17 @@ resolve_go() {
 }
 
 ensure_binary() {
-  if [[ -x "$ROOT/bin/grok" ]]; then
+  if [[ -x "$ROOT/bin/squirrel" ]]; then
     return
   fi
-  echo "[*] building bin/grok..."
+  echo "[*] building bin/squirrel..."
   local go_bin
   if ! go_bin=$(resolve_go); then
     echo "错误: 找不到 go。请安装 Go 1.21+ 或: mise install go"
     exit 1
   fi
   echo "[*] using $go_bin"
-  "$go_bin" build -ldflags "-s -w -X main.version=0.2.0-panel" -o "$ROOT/bin/grok" ./cmd/grok
+  "$go_bin" build -ldflags "-s -w -X main.version=0.2.0-panel" -o "$ROOT/bin/squirrel" ./cmd/grok
 }
 
 seed_host_config() {
@@ -245,7 +245,7 @@ else
   export PANEL_ADDR
 
   echo "[*] starting host panel on $PANEL_ADDR"
-  nohup "$ROOT/bin/grok" panel --addr "$PANEL_ADDR" --token "$PANEL_TOKEN" \
+  nohup "$ROOT/bin/squirrel" panel --addr "$PANEL_ADDR" --token "$PANEL_TOKEN" \
     >>"$LOG_FILE" 2>&1 &
   disown $! 2>/dev/null || true
 

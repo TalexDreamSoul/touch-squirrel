@@ -3,8 +3,8 @@ import "./globals.css";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
-  title: "Grok Panel",
-  description: "xAI / Grok 注册 · CPA · 号池 · 主从调度",
+  title: "touch-squirrel",
+  description: "touch-squirrel Host · 插件化注册 / 号池 / 联邦",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

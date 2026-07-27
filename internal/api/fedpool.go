@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/grok-free-register/grok-reg/internal/acctpool"
 	"github.com/grok-free-register/grok-reg/internal/config"
 	"github.com/grok-free-register/grok-reg/internal/cpa"
+	"github.com/grok-free-register/grok-reg/internal/tavilypool"
 )
 
 // handleFederationPoolList exposes the master's formal CPA pool metadata
@@ -41,16 +43,16 @@ func (s *Server) handleFederationPoolList(w http.ResponseWriter, r *http.Request
 	}
 	// strip nothing extra — AuthMeta is already slim
 	writeJSON(w, 200, map[string]any{
-		"ok":             true,
-		"source":         "federation",
+		"ok":              true,
+		"source":          "federation",
 		"share_pool_list": true,
 		"share_pool_pull": cfg.ClusterSharePoolPull,
-		"total":          total,
-		"page":           page,
-		"page_size":      pageSize,
-		"total_pages":    pageCount(total, pageSize),
-		"files":          list,
-		"master_name":    firstNonEmpty(cfg.ClusterNodeName, "master"),
+		"total":           total,
+		"page":            page,
+		"page_size":       pageSize,
+		"total_pages":     pageCount(total, pageSize),
+		"files":           list,
+		"master_name":     firstNonEmpty(cfg.ClusterNodeName, "master"),
 	})
 }
 
@@ -94,17 +96,56 @@ func (s *Server) handleFederationPoolPull(w http.ResponseWriter, r *http.Request
 }
 
 // handleUnifiedPoolList is the panel-side multi-source list:
-//   source=local|cloud|federation
-//   master=<base url> when source=federation
+//
+//	source=accounts|local|cloud|federation  (default accounts)
+//	type=xai|tavily|…                      (accounts only)
+//	plugin=…  status=…  q=…                (accounts only)
+//	master=<base url> when source=federation
 func (s *Server) handleUnifiedPoolList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	source := strings.ToLower(strings.TrimSpace(q.Get("source")))
 	if source == "" {
-		source = "local"
+		source = "accounts"
 	}
 	page, pageSize := parsePage(r, 1, 10, 100)
 
 	switch source {
+	case "accounts", "unified", "all":
+		if s.accounts == nil {
+			writeJSON(w, 500, map[string]any{"ok": false, "error": "accounts store unavailable"})
+			return
+		}
+		// refresh from legacy sources (upsert-safe) so new keys show up
+		_, _ = s.accounts.AutoMigrate(acctpool.MigrateOptions{
+			LocalPoolDir:   s.opt.Paths.LocalPool,
+			TavilyKeysPath: tavilypool.DefaultStatePath(s.opt.Paths.Root),
+			Force:          true,
+		})
+		res, err := s.accounts.List(acctpool.ListFilter{
+			Type:   q.Get("type"),
+			Plugin: q.Get("plugin"),
+			Status: q.Get("status"),
+			Q:      q.Get("q"),
+			Page:   page,
+			Limit:  pageSize,
+		})
+		if err != nil {
+			writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		types, _ := s.accounts.Types()
+		writeJSON(w, 200, map[string]any{
+			"ok":          true,
+			"source":      "accounts",
+			"items":       res.Items,
+			"total":       res.Total,
+			"page":        res.Page,
+			"page_size":   res.PageSize,
+			"total_pages": res.TotalPages,
+			"by_type":     res.ByType,
+			"types":       types,
+			"db":          s.accounts.Path(),
+		})
 	case "local":
 		all := s.localPool.List()
 		total, unsynced := s.localPool.Stats()
