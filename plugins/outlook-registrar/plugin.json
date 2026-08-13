@@ -1,0 +1,40 @@
+{
+  "id": "outlook-registrar",
+  "name": "Outlook 注册（reg-factory）",
+  "version": "0.1.0",
+  "description": "驱动 reg-factory outlook_reg_loop.py 常驻注册 Outlook 邮箱（生产邮箱池）",
+  "kind": ["registrar"],
+  "runtime": "bridge",
+  "entry": {
+    "bridge": "runner.py"
+  },
+  "hostApi": "0.1",
+  "capabilities": [
+    "email",
+    "browser",
+    "http",
+    "proxy",
+    "storage",
+    "secrets",
+    "events"
+  ],
+  "artifactKinds": [
+    "account.outlook"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "noRotate": {
+        "type": "boolean",
+        "default": false,
+        "description": "不轮换出口节点"
+      }
+    },
+    "additionalProperties": false
+  },
+  "ui": {
+    "panels": ["run-console", "settings"]
+  },
+  "source": "in-tree",
+  "status": "active"
+}

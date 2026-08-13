@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +28,7 @@ type Config struct {
 	Env         map[string]string
 	OutputDir   string
 	ArtifactDir string // root for artifact store
+	LogPath     string // optional: tee job logs to this run log file
 }
 
 // RunnerResult is the terminal outcome.
@@ -94,6 +96,22 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 	if mgr != nil {
 		mgr.Add(job)
 	}
+
+	// Optional: tee job logs to a run log file so failures are visible in the panel.
+	var logFile *os.File
+	if cfg.LogPath != "" {
+		if f, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			logFile = f
+			defer f.Close()
+		}
+	}
+	logf := func(format string, args ...any) {
+		job.AddLog(format, args...)
+		if logFile != nil {
+			_, _ = fmt.Fprintf(logFile, "%s %s\n", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
+		}
+	}
+
 	defer func() {
 		if job.Done() {
 			return
@@ -103,7 +121,7 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 
 	job.SetStatus(jobs.StatusRunning)
 	if b, err := json.Marshal(input); err == nil {
-		job.AddLog("bridge: config %s", string(b))
+		logf("bridge: config %s", string(b))
 	}
 
 	// Set up subprocess.
@@ -113,18 +131,11 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 	cmd := exec.CommandContext(cmdCtx, cfg.PythonExe, cfg.BridgePath)
 	cmd.Dir = filepath.Dir(cfg.BridgePath)
 
-	// Environment: inherit host, then merge bridge extras.
-	cmd.Env = os.Environ()
-	if cfg.Env != nil {
-		for k, v := range cfg.Env {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-		}
-	}
-	// Always point to the bridge script directory as PYTHONPATH root.
-	cmd.Env = append(cmd.Env,
-		"PYTHONUNBUFFERED=1",
-		fmt.Sprintf("REG_FACTORY_ROOT=%s", filepath.Dir(cfg.BridgePath)),
-	)
+	// Environment values must be unique. Repeated keys rely on platform-specific
+	// precedence and can silently select the wrong registrar checkout.
+	cmd.Env = mergedEnvironment(os.Environ(), cfg.Env, map[string]string{
+		"PYTHONUNBUFFERED": "1",
+	})
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
@@ -141,16 +152,16 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 
 	if err := cmd.Start(); err != nil {
 		job.SetStatus(jobs.StatusFailed)
-		job.AddLog("bridge: start failed: %v", err)
+		logf("bridge: start failed: %v", err)
 		return RunnerResult{JobID: job.ID, Error: err}, err
 	}
-	job.AddLog("bridge: started pid=%d plugin=%s", cmd.Process.Pid, cfg.PluginID)
+	logf("bridge: started pid=%d plugin=%s", cmd.Process.Pid, cfg.PluginID)
 
 	// Feed stdin.
 	go func() {
 		defer stdinPipe.Close()
 		if _, err := io.WriteString(stdinPipe, string(stdinPayload)+"\n"); err != nil {
-			job.AddLog("bridge: stdin write error: %v", err)
+			logf("bridge: stdin write error: %v", err)
 		}
 	}()
 
@@ -160,7 +171,7 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 		for sc.Scan() {
 			line := strings.TrimSpace(sc.Text())
 			if line != "" {
-				job.AddLog("bridge: stderr: %s", line)
+				logf("bridge: stderr: %s", line)
 			}
 		}
 	}()
@@ -181,7 +192,7 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 
 		ev, err := Parse([]byte(line))
 		if err != nil {
-			job.AddLog("bridge: parse: %v (line=%s)", err, truncate(line, 120))
+			logf("bridge: parse: %v (line=%s)", err, truncate(line, 120))
 			continue
 		}
 
@@ -189,33 +200,33 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 		case EventProgress:
 			var p Progress
 			if err := json.Unmarshal(ev.Raw, &p); err == nil {
-				job.AddLog("[%d/%d] %s", p.Done, p.Total, p.Email)
+				logf("[%d/%d] %s", p.Done, p.Total, p.Email)
 				if p.Done > 0 && p.Done <= len(items) {
 					job.MutateItem(p.Done-1, func(it *jobs.Item) { it.Status = jobs.ItemSuccess })
 				}
 			} else {
-				job.AddLog("bridge: bad progress: %s", line)
+				logf("bridge: bad progress: %s", line)
 			}
 
 		case EventLog:
 			var l Log
 			if err := json.Unmarshal(ev.Raw, &l); err == nil {
-				job.AddLog("%s", l.Msg)
+				logf("%s", l.Msg)
 			}
 
 		case EventCaptcha:
 			var c Captcha
 			if err := json.Unmarshal(ev.Raw, &c); err == nil {
-				job.AddLog("[captcha] %s %s", c.Status, c.Platform)
+				logf("[captcha] %s %s", c.Status, c.Platform)
 			}
 
 		case EventArtifact:
 			var a Artifact
 			if err := json.Unmarshal(ev.Raw, &a); err == nil {
-				job.AddLog("[artifact] %s %s", a.Kind, a.File)
+				logf("[artifact] %s %s", a.Kind, a.File)
 				// Try to ingest the artifact.
 				if err := ingestArtifact(artStore, cfg.PluginID, a, cfg.OutputDir); err != nil {
-					job.AddLog("bridge: artifact ingest error: %v", err)
+					logf("bridge: artifact ingest error: %v", err)
 				}
 			}
 
@@ -225,22 +236,22 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 				result.OK = d.OK
 				result.Fail = d.Fail
 			}
-			job.AddLog("[done] ok=%d fail=%d total=%d", result.OK, result.Fail, result.Total)
+			logf("[done] ok=%d fail=%d total=%d", result.OK, result.Fail, result.Total)
 
 		case EventError:
 			var e Error
 			if err := json.Unmarshal(ev.Raw, &e); err == nil {
-				job.AddLog("[error] attempt=%d %s %s", e.Attempt, e.Email, e.Msg)
+				logf("[error] attempt=%d %s %s", e.Attempt, e.Email, e.Msg)
 			}
 
 		default:
-			job.AddLog("bridge: unknown event: %s", line)
+			logf("bridge: unknown event: %s", line)
 		}
 
 		// Check cancellation.
 		select {
 		case <-ctx.Done():
-			job.AddLog("bridge: context cancelled, killing subprocess")
+			logf("bridge: context cancelled, killing subprocess")
 			cancel()
 			// Graceful then force.
 			if cmd.Process != nil {
@@ -256,7 +267,7 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 	}
 
 	if err := sc.Err(); err != nil {
-		job.AddLog("bridge: stdout scanner error: %v", err)
+		logf("bridge: stdout scanner error: %v", err)
 	}
 
 	// Wait for process to exit.
@@ -270,7 +281,7 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 		}
 	}
 
-	job.AddLog("bridge: process exited code=%d ok=%d fail=%d", exitCode, result.OK, result.Fail)
+	logf("bridge: process exited code=%d ok=%d fail=%d", exitCode, result.OK, result.Fail)
 
 	// Determine final job status.
 	if result.Error != nil {
@@ -315,6 +326,33 @@ func ingestArtifact(store *artifact.Store, pluginID string, a Artifact, outputDi
 
 // findPython looks for a Python interpreter.
 // Precedence: GROK_PYTHON env → python3 on PATH → python on PATH.
+func mergedEnvironment(base []string, overrides ...map[string]string) []string {
+	values := make(map[string]string, len(base))
+	for _, entry := range base {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && key != "" {
+			values[key] = value
+		}
+	}
+	for _, set := range overrides {
+		for key, value := range set {
+			if key != "" {
+				values[key] = value
+			}
+		}
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, key+"="+values[key])
+	}
+	return out
+}
+
 func findPython() string {
 	if s := os.Getenv("GROK_PYTHON"); s != "" {
 		return s

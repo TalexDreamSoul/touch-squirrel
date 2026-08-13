@@ -1,0 +1,34 @@
+{
+  "id": "chatgpt-registrar",
+  "name": "ChatGPT 注册（reg-factory）",
+  "version": "0.1.0",
+  "description": "驱动 reg-factory register_chatgpt.py 注册 ChatGPT（Playwright + BitBrowser）",
+  "kind": ["registrar"],
+  "runtime": "bridge",
+  "entry": {
+    "bridge": "runner.py"
+  },
+  "hostApi": "0.1",
+  "capabilities": [
+    "email",
+    "browser",
+    "http",
+    "proxy",
+    "storage",
+    "secrets",
+    "events"
+  ],
+  "artifactKinds": [
+    "session.token"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "ui": {
+    "panels": ["run-console", "settings"]
+  },
+  "source": "in-tree",
+  "status": "active"
+}

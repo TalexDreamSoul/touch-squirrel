@@ -482,9 +482,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 type startReq struct {
-	Target int    `json:"target"`
-	Plugin string `json:"plugin"` // registrar plugin id; default xai-accounts
-	Type   string `json:"type"`   // account type alias: xai|tavily
+	Target int            `json:"target"`
+	Plugin string         `json:"plugin"` // registrar plugin id; default xai-accounts
+	Type   string         `json:"type"`   // account type alias: xai|tavily
+	Config map[string]any `json:"config"` // plugin-specific config (bridge plugins)
 }
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
@@ -551,7 +552,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	default:
 		if it.Manifest.Runtime == plugin.RuntimeBridge && it.Manifest.Entry.Bridge != "" {
-			s.handleBridgeStart(w, r, target, pluginID, it)
+			s.handleBridgeStart(w, r, target, pluginID, it, req.Config)
 			return
 		}
 		writeJSON(w, 400, map[string]any{
@@ -587,7 +588,7 @@ func (s *Server) handleXAIStart(w http.ResponseWriter, r *http.Request, target i
 }
 
 // handleBridgeStart starts a bridge-type plugin subprocess as a tracked job.
-func (s *Server) handleBridgeStart(w http.ResponseWriter, r *http.Request, target int, pluginID string, it plugin.Installed) {
+func (s *Server) handleBridgeStart(w http.ResponseWriter, r *http.Request, target int, pluginID string, it plugin.Installed, pluginCfg map[string]any) {
 	if pip, err := daemon.ReadPID(s.opt.Paths.PID); err == nil && daemon.PIDAlive(pip) {
 		writeJSON(w, 409, map[string]any{"ok": false, "error": fmt.Sprintf("已有注册任务运行中 (pid %d)", pip)})
 		return
@@ -600,14 +601,58 @@ func (s *Server) handleBridgeStart(w http.ResponseWriter, r *http.Request, targe
 
 	bridgePath := filepath.Join(it.Root, it.Manifest.Entry.Bridge)
 
-	// Build env: inherit host config for BitBrowser, Clash, captcha keys.
+	// Build env: inherit host config for BitBrowser, Clash, captcha keys, and
+	// bridge roots (grok-register-panel / reg-factory checkouts).
 	cfg, _ := config.Load(s.opt.Paths.Config)
-	bridgeEnv := map[string]string{
-		"OUTLOOK_POOL_DIR": filepath.Join(s.opt.Paths.Root, "_outlook_pool"),
+	bridgeEnv := map[string]string{}
+	if pool := firstNonEmpty(cfg.BridgeOutlookPoolDir, os.Getenv("OUTLOOK_POOL_DIR")); pool != "" {
+		bridgeEnv["OUTLOOK_POOL_DIR"] = pool
+	}
+	if root := firstNonEmpty(cfg.BridgeRegFactoryRoot, os.Getenv("REG_FACTORY_ROOT")); root != "" {
+		bridgeEnv["REG_FACTORY_ROOT"] = root
+	}
+	if root := firstNonEmpty(cfg.BridgeGrokPanelRoot, os.Getenv("GROK_PANEL_ROOT")); root != "" {
+		bridgeEnv["GROK_PANEL_ROOT"] = root
 	}
 	if cfg.CPAManagementKey != "" {
 		bridgeEnv["CPA_MGMT_KEY"] = cfg.CPAManagementKey
 	}
+
+	// 平台能力注入：邮箱 provider / MailRouter / Resin。
+	// 平台 config.env 统一管理这些能力，新建任务时透传给 bridge 子进程，
+	// runner.py 据此调用平台能力（而非 reg-factory 自己的 .env）。
+	setEnv := func(k, v string) {
+		if v != "" {
+			bridgeEnv[k] = v
+		}
+	}
+	// 邮箱 provider（用 reg-factory 认识的 env key）
+	setEnv("TEMP_EMAIL_PROVIDER", string(cfg.EmailMode))
+	setEnv("EMAIL_MODE", string(cfg.EmailMode))
+	setEnv("YYDS_API_KEY", cfg.YYDSKey)
+	setEnv("YYDS_DEFAULT_DOMAIN", cfg.YYDSDomain)
+	setEnv("MOEMAIL_API_KEY", cfg.MoeMailKey)
+	setEnv("MOEMAIL_BASE_URL", cfg.MoeMailBase)
+	setEnv("MOEMAIL_DOMAIN", cfg.MoeMailDomain)
+	setEnv("MOEMAIL_EXPIRY_MS", strconv.FormatInt(cfg.MoeMailExpiryMS, 10))
+	setEnv("DUCKMAIL_API_KEY", cfg.DuckMailKey)
+	setEnv("DUCKMAIL_API_BASE", cfg.DuckMailBase)
+	setEnv("MAILNEST_API_KEY", cfg.MailNestKey)
+	setEnv("MAILNEST_PROJECT_CODE", cfg.MailNestProjectCode)
+	setEnv("CLOUDMAIL_PASSWORD", cfg.CloudMailPassword)
+	setEnv("CLOUDFLARE_API_KEY", cfg.CloudflareKey)
+	setEnv("CLOUDFLARE_CUSTOM_AUTH", cfg.CloudflareCustomAuth)
+
+	// MailRouter（平台统一邮箱路由）
+	setEnv("MAIL_ROUTER_URL", cfg.MailRouterURL)
+	setEnv("MAIL_ROUTER_API_KEY", cfg.MailRouterAPIKey)
+	setEnv("MAIL_ROUTER_DOMAIN", cfg.MailRouterDomain)
+
+	// Resin（平台统一代理出口）
+	setEnv("RESIN_PROXY", cfg.ResinProxy)
+	setEnv("RESIN_TOKEN", cfg.ResinToken)
+	setEnv("RESIN_PLATFORM", cfg.ResinPlatform)
+
 	// Pass through common captcha envs.
 	for _, k := range []string{
 		"YESCAPTCHA_API_KEY", "YESCAPTCHA_API_BASE",
@@ -621,18 +666,30 @@ func (s *Server) handleBridgeStart(w http.ResponseWriter, r *http.Request, targe
 	}
 
 	// Spawn bridge as a tracked background job.
+	if pluginCfg == nil {
+		pluginCfg = map[string]any{}
+	}
 	bridgeMgr := jobs.NewManager(pluginID, 24*time.Hour)
 	go func() {
-		bridge.Run(context.Background(), bridgeMgr, bridge.Config{
+		if _, err := bridge.Run(context.Background(), bridgeMgr, bridge.Config{
 			PluginID:    pluginID,
 			BridgePath:  bridgePath,
-			PythonExe:   os.Getenv("GROK_PYTHON"),
+			PythonExe:   firstNonEmpty(cfg.BridgePythonExe, os.Getenv("GROK_PYTHON")),
 			Target:      target,
-			PluginCfg:   map[string]any{"auto": true},
+			PluginCfg:   pluginCfg,
 			Env:         bridgeEnv,
 			OutputDir:   outputDir,
 			ArtifactDir: filepath.Join(s.opt.Paths.Root, "artifacts"),
-		})
+			LogPath:     logPath,
+		}); err != nil {
+			// bridge 启动/运行失败时，错误被写到 run 日志与 stderr，便于面板排障。
+			msg := fmt.Sprintf("bridge %s run failed: %v\n", pluginID, err)
+			_, _ = fmt.Fprint(os.Stderr, msg)
+			if f, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); ferr == nil {
+				_, _ = f.WriteString(msg)
+				_ = f.Close()
+			}
+		}
 	}()
 
 	writeJSON(w, 200, map[string]any{

@@ -98,12 +98,12 @@ func (m Manifest) Validate() error {
 		}
 	}
 	switch m.Runtime {
-	case RuntimeGo, RuntimeJS, RuntimeHybrid:
+	case RuntimeGo, RuntimeJS, RuntimeHybrid, RuntimeBridge:
 	default:
-		return fmt.Errorf("plugin %s: runtime must be go|js|hybrid", m.ID)
+		return fmt.Errorf("plugin %s: runtime must be go|js|hybrid|bridge", m.ID)
 	}
-	if strings.TrimSpace(m.Entry.Go) == "" && strings.TrimSpace(m.Entry.JS) == "" {
-		return fmt.Errorf("plugin %s: entry.go or entry.js required", m.ID)
+	if strings.TrimSpace(m.Entry.Go) == "" && strings.TrimSpace(m.Entry.JS) == "" && strings.TrimSpace(m.Entry.Bridge) == "" {
+		return fmt.Errorf("plugin %s: entry.go, entry.js or entry.bridge required", m.ID)
 	}
 	if strings.TrimSpace(m.HostAPI) == "" {
 		return fmt.Errorf("plugin %s: hostApi required", m.ID)

@@ -1,0 +1,39 @@
+{
+  "id": "grok-http-registrar",
+  "name": "Grok 注册（reg-factory HTTP）",
+  "version": "0.1.0",
+  "description": "驱动 reg-factory register_grok_http.py 注册 Grok（纯 HTTP，无浏览器）",
+  "kind": ["registrar"],
+  "runtime": "bridge",
+  "entry": {
+    "bridge": "runner.py"
+  },
+  "hostApi": "0.1",
+  "capabilities": [
+    "email",
+    "http",
+    "proxy",
+    "storage",
+    "secrets",
+    "events"
+  ],
+  "artifactKinds": [
+    "session.sso"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "sub2api": {
+        "type": "boolean",
+        "default": false,
+        "description": "注册后导入 SUB2API"
+      }
+    },
+    "additionalProperties": false
+  },
+  "ui": {
+    "panels": ["run-console", "settings"]
+  },
+  "source": "in-tree",
+  "status": "active"
+}
