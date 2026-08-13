@@ -3,10 +3,10 @@ package protocol
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -24,18 +24,25 @@ import (
 )
 
 const (
-	SiteURL              = "https://accounts.x.ai"
-	ConnectCreate        = SiteURL + "/auth_mgmt.AuthManagement/CreateEmailValidationCode"
-	ConnectVerify        = SiteURL + "/auth_mgmt.AuthManagement/VerifyEmailValidationCode"
-	SignupURLGrok        = SiteURL + "/sign-up?redirect=grok-com"
-	DefaultUserAgent     = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+	SiteURL          = "https://accounts.x.ai"
+	ConnectCreate    = SiteURL + "/auth_mgmt.AuthManagement/CreateEmailValidationCode"
+	ConnectVerify    = SiteURL + "/auth_mgmt.AuthManagement/VerifyEmailValidationCode"
+	SignupURLGrok    = SiteURL + "/sign-up?redirect=grok-com"
+	DefaultUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 )
 
 var (
-	siteKeyRe  = regexp.MustCompile(`0x4AAAAAAA[a-zA-Z0-9_-]+`)
-	jsSrcRe    = regexp.MustCompile(`src="(/_next/static/[^"]+\.js)"`)
-	hex40Re    = regexp.MustCompile(`[a-fA-F0-9]{40,50}`)
-	flightRe   = regexp.MustCompile(`self\.__next_f\.push\(\[1,"(.*?)"\]\)`)
+	siteKeyRe = regexp.MustCompile(`0x4AAAAAAA[a-zA-Z0-9_-]+`)
+	// Turbopack 构建后 script 标签带 ?dpl= / async / nonce，.js 后不再紧跟引号，
+	// 旧正则 \.js" 匹配不到，改为只匹配到 .js（允许后续查询串）。
+	jsSrcRe  = regexp.MustCompile(`src="(/_next/static/[^"]+\.js)`)
+	hex40Re  = regexp.MustCompile(`[a-fA-F0-9]{40,50}`)
+	flightRe = regexp.MustCompile(`self\.__next_f\.push\(\[1,"(.*?)"\]\)`)
+
+	// Turbopack 下 server action 以 createServerReference("<42 hex>") 形式存在，
+	// 与 useMutation({mutationFn:X}) 里的变量 X 关联，避免误取“注册完成跟踪”的 action。
+	mutationFnRe = regexp.MustCompile(`mutationFn:(\w+)`)
+	createRefRe  = regexp.MustCompile(`createServerReference\)\("([a-fA-F0-9]{42})"`)
 )
 
 type SignupConfig struct {
@@ -46,12 +53,12 @@ type SignupConfig struct {
 }
 
 type Client struct {
-	http    *http.Client
-	proxy   string
-	clear   *clearance.Manager
-	ua      string
-	mu      sync.Mutex
-	cfg     SignupConfig
+	http  *http.Client
+	proxy string
+	clear *clearance.Manager
+	ua    string
+	mu    sync.Mutex
+	cfg   SignupConfig
 }
 
 func NewClient(proxy string, cm *clearance.Manager) (*Client, error) {
@@ -157,9 +164,9 @@ func (c *Client) FetchConfig() (SignupConfig, error) {
 		if !strings.Contains(js, "createUser") && !strings.Contains(js, "registerUser") && !strings.Contains(js, "emailValidation") {
 			continue
 		}
-		if hexes := hex40Re.FindAllString(js, -1); len(hexes) > 0 {
-			cfg.ActionID = hexes[0]
-		}
+		// 精确提取：signup 提交的 server action 变量被 useMutation({mutationFn:X}) 引用；
+		// 同一个 chunk 里还有“注册完成跟踪”的 action，不能取第一个 hex。
+		cfg.ActionID = actionIDFromJS(js)
 	}
 	if cfg.SiteKey == "" || cfg.ActionID == "" || cfg.StateTree == "" {
 		return cfg, fmt.Errorf("config incomplete site_key=%v action=%v state=%v", cfg.SiteKey != "", cfg.ActionID != "", cfg.StateTree != "")
@@ -168,6 +175,22 @@ func (c *Client) FetchConfig() (SignupConfig, error) {
 	c.cfg = cfg
 	c.mu.Unlock()
 	return cfg, nil
+}
+
+func actionIDFromJS(js string) string {
+	if m := mutationFnRe.FindStringSubmatch(js); len(m) > 1 {
+		refRe := regexp.MustCompile(regexp.QuoteMeta(m[1]) + `\s*=\s*\(0,\w+\.createServerReference\)\("([a-fA-F0-9]{42})"`)
+		if vm := refRe.FindStringSubmatch(js); len(vm) > 1 {
+			return vm[1]
+		}
+	}
+	if refs := createRefRe.FindAllStringSubmatch(js, -1); len(refs) > 0 {
+		return refs[0][1]
+	}
+	if hexes := hex40Re.FindAllString(js, -1); len(hexes) > 0 {
+		return hexes[0]
+	}
+	return ""
 }
 
 func (c *Client) fetchJS(path string) (string, error) {
