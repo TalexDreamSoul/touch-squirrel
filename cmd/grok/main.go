@@ -537,15 +537,6 @@ func cmdUpload() error {
 	if err != nil {
 		return err
 	}
-	if v := os.Getenv("CPA_UPLOAD_ENABLED"); v != "" {
-		cfg.CPAUploadEnabled = v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
-	}
-	if v := os.Getenv("CPA_MANAGEMENT_BASE"); v != "" {
-		cfg.CPAManagementBase = v
-	}
-	if v := os.Getenv("CPA_MANAGEMENT_KEY"); v != "" {
-		cfg.CPAManagementKey = v
-	}
 	if strings.TrimSpace(cfg.CPAManagementKey) == "" {
 		return fmt.Errorf("未配置 CPA_MANAGEMENT_KEY（在 ~/.grok/config.env 或环境变量中设置）")
 	}

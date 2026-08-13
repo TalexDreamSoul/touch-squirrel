@@ -12,14 +12,51 @@ import (
 type EmailMode string
 
 const (
-	EmailTempmail EmailMode = "tempmail"
-	EmailCustom   EmailMode = "custom"
+	EmailTempmail   EmailMode = "tempmail"
+	EmailCustom     EmailMode = "custom"
+	EmailDuckMail   EmailMode = "duckmail"
+	EmailCloudflare EmailMode = "cloudflare"
+	EmailCloudMail  EmailMode = "cloudmail"
+	EmailMailNest   EmailMode = "mailnest"
+	EmailMoeMail    EmailMode = "moemail"
+	EmailYYDS       EmailMode = "yyds"
 )
 
 type Config struct {
 	EmailMode   EmailMode
 	EmailDomain string
 	EmailAPI    string
+
+	// Email providers (from grok-register-panel). Each maps to the same-named
+	// lowercase config key in grok-register-panel (e.g. duckmail_api_key).
+	EmailDefaultDomains          string // comma-separated, shared by cloudflare/cloudmail
+	DuckMailBase                 string
+	DuckMailKey                  string
+	CloudflareBase               string
+	CloudflareKey                string
+	CloudflareAuthMode           string // none | x-api-key | x-admin-auth | query-key | bearer
+	CloudflareCustomAuth         string
+	CloudflareRandomizeSubdomain bool
+	CloudMailURL                 string
+	CloudMailAdminEmail          string
+	CloudMailPassword            string
+	MailNestKey                  string
+	MailNestProjectCode          string
+	MoeMailBase                  string
+	MoeMailKey                   string
+	MoeMailDomain                string
+	MoeMailExpiryMS              int64
+	YYDSKey                      string
+	YYDSJWT                      string
+	YYDSDomain                   string
+
+	// Bridge plugins integrate locally installed registrar projects. These are
+	// runtime paths, so they belong to the persistent panel configuration rather
+	// than the process environment.
+	BridgeRegFactoryRoot string
+	BridgeGrokPanelRoot  string
+	BridgeOutlookPoolDir string
+	BridgePythonExe      string
 
 	ClearanceEnabled bool
 	RegisterProxy    string
@@ -30,8 +67,12 @@ type Config struct {
 	Target      int
 	PhysicalCap int
 
-	TurnstileProvider string
-	LiteSolverURL     string
+	TurnstileProvider        string
+	LiteSolverURL            string
+	TurnstileChromePath      string
+	TurnstilePython          string
+	TurnstileScript          string
+	TurnstileInjectClearance bool
 
 	ProtocolHTTP bool
 	HTTPPoolSize int
@@ -121,64 +162,67 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		EmailMode:             EmailTempmail,
-		EmailAPI:              "http://127.0.0.1:8080",
-		ClearanceEnabled:      true,
-		RegisterProxy:         "http://127.0.0.1:40080",
-		FlareSolverrURL:       "http://127.0.0.1:8191",
-		ClearanceProxy:        "http://privoxy:8118",
-		ClearanceURLs:         "https://accounts.x.ai,https://x.ai,https://status.x.ai,https://console.x.ai,https://auth.x.ai",
-		Target:                10,
-		PhysicalCap:           0,
-		TurnstileProvider:     "browser",
-		LiteSolverURL:         "http://127.0.0.1:5072",
-		ProtocolHTTP:          true,
-		HTTPPoolSize:          8,
-		TempmailLOLRetries:    30,
-		TempmailLOLIntervalMS: 1500,
-		OAuthMinIntervalSec:   10,
-		OAuthRetrySec:         60,
-		ProbeEnabled:          true,
-		HTTPProxy:             "http://127.0.0.1:40080",
-		HTTPSProxy:            "http://127.0.0.1:40080",
-		NoProxy:               "127.0.0.1,localhost",
-		ResinPlatform:         "Default",
-		CPAUploadEnabled:      false,
-		CPAManagementBase:     "http://localhost:8317/v0/management",
-		CPAUploadTimeoutSec:   30,
-		CPAUploadRetries:      2,
-		CPAUploadNameTemplate: "{email}.json",
-		CPAUploadVerify:       true,
-		CPAUploadMode:         "multipart",
-		UploadConcurrency:     3,
-		UploadBatchSize:       20,
-		ExportBatchSize:       500,
-		ExportConcurrency:     15,
-		PatrolEnabled:         false,
-		PatrolIntervalMin:     30,
-		PatrolDeepProbe:       false,
-		PatrolConcurrency:     10,
-		QuotaPerAccount:       60,
-		RefillEnabled:         false,
-		RefillMinHealthy:      5,
-		RefillBatch:           10,
-		RefillCooldownMin:     60,
-		RefillDailyCap:        50,
-		CleanupQuotaEnabled:   false,
-		CleanupOnPatrol:       true,
-		CleanupBackup:         true,
-		CleanupDryRun:         false,
-		ClusterRole:           "standalone",
-		ClusterHeartbeatSec:   15,
-		ClusterPoolTarget:     50,
-		ClusterAssignMin:      1,
-		ClusterAssignMax:      10,
-		ClusterAutoRegister:   true,
-		ClusterAutoUpload:     true,
-		ClusterSharePoolList:  false,
-		ClusterSharePoolPull:  false,
-		LocalPoolAutoImport:   true,
-		LocalPoolAutoSync:     false,
+		EmailMode:                    EmailTempmail,
+		EmailAPI:                     "http://127.0.0.1:8080",
+		ClearanceEnabled:             true,
+		RegisterProxy:                "http://127.0.0.1:40080",
+		FlareSolverrURL:              "http://127.0.0.1:8191",
+		ClearanceProxy:               "http://privoxy:8118",
+		ClearanceURLs:                "https://accounts.x.ai,https://x.ai,https://status.x.ai,https://console.x.ai,https://auth.x.ai",
+		Target:                       10,
+		PhysicalCap:                  0,
+		TurnstileProvider:            "browser",
+		LiteSolverURL:                "http://127.0.0.1:5072",
+		ProtocolHTTP:                 true,
+		HTTPPoolSize:                 8,
+		TempmailLOLRetries:           30,
+		TempmailLOLIntervalMS:        1500,
+		CloudflareRandomizeSubdomain: true,
+		MailNestProjectCode:          "x-ai001",
+		MoeMailExpiryMS:              3600000,
+		OAuthMinIntervalSec:          10,
+		OAuthRetrySec:                60,
+		ProbeEnabled:                 true,
+		HTTPProxy:                    "http://127.0.0.1:40080",
+		HTTPSProxy:                   "http://127.0.0.1:40080",
+		NoProxy:                      "127.0.0.1,localhost",
+		ResinPlatform:                "Default",
+		CPAUploadEnabled:             false,
+		CPAManagementBase:            "http://localhost:8317/v0/management",
+		CPAUploadTimeoutSec:          30,
+		CPAUploadRetries:             2,
+		CPAUploadNameTemplate:        "{email}.json",
+		CPAUploadVerify:              true,
+		CPAUploadMode:                "multipart",
+		UploadConcurrency:            3,
+		UploadBatchSize:              20,
+		ExportBatchSize:              500,
+		ExportConcurrency:            15,
+		PatrolEnabled:                false,
+		PatrolIntervalMin:            30,
+		PatrolDeepProbe:              false,
+		PatrolConcurrency:            10,
+		QuotaPerAccount:              60,
+		RefillEnabled:                false,
+		RefillMinHealthy:             5,
+		RefillBatch:                  10,
+		RefillCooldownMin:            60,
+		RefillDailyCap:               50,
+		CleanupQuotaEnabled:          false,
+		CleanupOnPatrol:              true,
+		CleanupBackup:                true,
+		CleanupDryRun:                false,
+		ClusterRole:                  "standalone",
+		ClusterHeartbeatSec:          15,
+		ClusterPoolTarget:            50,
+		ClusterAssignMin:             1,
+		ClusterAssignMax:             10,
+		ClusterAutoRegister:          true,
+		ClusterAutoUpload:            true,
+		ClusterSharePoolList:         false,
+		ClusterSharePoolPull:         false,
+		LocalPoolAutoImport:          true,
+		LocalPoolAutoSync:            false,
 	}
 }
 
@@ -206,17 +250,39 @@ func Save(path string, cfg Config) error {
 	if cfg.EmailAPI != "" {
 		b.WriteString(fmt.Sprintf("EMAIL_API=%s\n", cfg.EmailAPI))
 	}
+	b.WriteString(fmt.Sprintf("DEFAULT_DOMAINS=%s\n", cfg.EmailDefaultDomains))
+	b.WriteString(fmt.Sprintf("DUCKMAIL_API_BASE=%s\n", cfg.DuckMailBase))
+	// DUCKMAIL_API_KEY: written by saveConfigWithSecrets.
+	b.WriteString(fmt.Sprintf("CLOUDFLARE_API_BASE=%s\n", cfg.CloudflareBase))
+	// CLOUDFLARE_API_KEY / CLOUDFLARE_CUSTOM_AUTH: written by saveConfigWithSecrets.
+	b.WriteString(fmt.Sprintf("CLOUDFLARE_AUTH_MODE=%s\n", cfg.CloudflareAuthMode))
+	b.WriteString(fmt.Sprintf("CLOUDFLARE_RANDOMIZE_SUBDOMAIN=%s\n", bool01(cfg.CloudflareRandomizeSubdomain)))
+	b.WriteString(fmt.Sprintf("CLOUDMAIL_URL=%s\n", cfg.CloudMailURL))
+	b.WriteString(fmt.Sprintf("CLOUDMAIL_ADMIN_EMAIL=%s\n", cfg.CloudMailAdminEmail))
+	// CLOUDMAIL_PASSWORD: written by saveConfigWithSecrets.
+	b.WriteString(fmt.Sprintf("MAILNEST_PROJECT_CODE=%s\n", cfg.MailNestProjectCode))
+	// MAILNEST_API_KEY: written by saveConfigWithSecrets.
+	b.WriteString(fmt.Sprintf("MOEMAIL_API_BASE=%s\n", cfg.MoeMailBase))
+	b.WriteString(fmt.Sprintf("MOEMAIL_DOMAIN=%s\n", cfg.MoeMailDomain))
+	b.WriteString(fmt.Sprintf("MOEMAIL_EXPIRY_MS=%d\n", cfg.MoeMailExpiryMS))
+	// MOEMAIL_API_KEY: written by saveConfigWithSecrets.
+	b.WriteString(fmt.Sprintf("YYDS_DEFAULT_DOMAIN=%s\n", cfg.YYDSDomain))
+	// YYDS_API_KEY / YYDS_JWT: written by saveConfigWithSecrets.
 	b.WriteString(fmt.Sprintf("CLEARANCE_ENABLED=%s\n", bool01(cfg.ClearanceEnabled)))
 	b.WriteString(fmt.Sprintf("REGISTER_PROXY=%s\n", cfg.RegisterProxy))
 	b.WriteString(fmt.Sprintf("FLARESOLVERR_URL=%s\n", cfg.FlareSolverrURL))
 	b.WriteString(fmt.Sprintf("CLEARANCE_PROXY=%s\n", cfg.ClearanceProxy))
 	b.WriteString(fmt.Sprintf("CLEARANCE_URLS=%s\n", cfg.ClearanceURLs))
 	b.WriteString(fmt.Sprintf("TURNSTILE_PROVIDER=%s\n", cfg.TurnstileProvider))
-	if cfg.LiteSolverURL != "" {
-		b.WriteString(fmt.Sprintf("LITE_SOLVER_URL=%s\n", cfg.LiteSolverURL))
-	}
+	b.WriteString(fmt.Sprintf("LITE_SOLVER_URL=%s\n", cfg.LiteSolverURL))
+	b.WriteString(fmt.Sprintf("TURNSTILE_CHROME_PATH=%s\n", cfg.TurnstileChromePath))
+	b.WriteString(fmt.Sprintf("TURNSTILE_PYTHON=%s\n", cfg.TurnstilePython))
+	b.WriteString(fmt.Sprintf("TURNSTILE_SCRIPT=%s\n", cfg.TurnstileScript))
+	b.WriteString(fmt.Sprintf("TURNSTILE_INJECT_CLEARANCE=%s\n", bool01(cfg.TurnstileInjectClearance)))
 	b.WriteString(fmt.Sprintf("PROTOCOL_HTTP=%s\n", bool01(cfg.ProtocolHTTP)))
 	b.WriteString(fmt.Sprintf("HTTP_POOL_SIZE=%d\n", cfg.HTTPPoolSize))
+	b.WriteString(fmt.Sprintf("OAUTH_MIN_INTERVAL_SEC=%g\n", cfg.OAuthMinIntervalSec))
+	b.WriteString(fmt.Sprintf("OAUTH_RETRY_SEC=%g\n", cfg.OAuthRetrySec))
 	b.WriteString(fmt.Sprintf("TEMPMAIL_LOL_RETRIES=%d\n", cfg.TempmailLOLRetries))
 	b.WriteString(fmt.Sprintf("TEMPMAIL_LOL_MIN_INTERVAL_MS=%d\n", cfg.TempmailLOLIntervalMS))
 	b.WriteString(fmt.Sprintf("HTTPS_PROXY=%s\n", cfg.HTTPSProxy))
@@ -228,6 +294,10 @@ func Save(path string, cfg Config) error {
 	b.WriteString(fmt.Sprintf("MAIL_ROUTER_URL=%s\n", cfg.MailRouterURL))
 	b.WriteString(fmt.Sprintf("MAIL_ROUTER_DOMAIN=%s\n", cfg.MailRouterDomain))
 	// MAIL_ROUTER_API_KEY: written via appendEnvKey when explicitly set from panel.
+	b.WriteString(fmt.Sprintf("BRIDGE_REG_FACTORY_ROOT=%s\n", cfg.BridgeRegFactoryRoot))
+	b.WriteString(fmt.Sprintf("BRIDGE_GROK_PANEL_ROOT=%s\n", cfg.BridgeGrokPanelRoot))
+	b.WriteString(fmt.Sprintf("BRIDGE_OUTLOOK_POOL_DIR=%s\n", cfg.BridgeOutlookPoolDir))
+	b.WriteString(fmt.Sprintf("BRIDGE_PYTHON=%s\n", cfg.BridgePythonExe))
 	b.WriteString(fmt.Sprintf("PROBE_ENABLED=%s\n", bool01(cfg.ProbeEnabled)))
 	b.WriteString(fmt.Sprintf("PHYSICAL_CAP=%d\n", cfg.PhysicalCap))
 	b.WriteString(fmt.Sprintf("CPA_UPLOAD_ENABLED=%s\n", bool01(cfg.CPAUploadEnabled)))
@@ -236,6 +306,8 @@ func Save(path string, cfg Config) error {
 	b.WriteString(fmt.Sprintf("CPA_UPLOAD_TIMEOUT_SEC=%d\n", cfg.CPAUploadTimeoutSec))
 	b.WriteString(fmt.Sprintf("CPA_UPLOAD_RETRIES=%d\n", cfg.CPAUploadRetries))
 	b.WriteString(fmt.Sprintf("CPA_UPLOAD_NAME_TEMPLATE=%s\n", cfg.CPAUploadNameTemplate))
+	b.WriteString(fmt.Sprintf("CPA_UPLOAD_VERIFY=%s\n", bool01(cfg.CPAUploadVerify)))
+	b.WriteString(fmt.Sprintf("CPA_UPLOAD_MODE=%s\n", cfg.CPAUploadMode))
 	b.WriteString(fmt.Sprintf("UPLOAD_CONCURRENCY=%d\n", cfg.UploadConcurrency))
 	b.WriteString(fmt.Sprintf("UPLOAD_BATCH_SIZE=%d\n", cfg.UploadBatchSize))
 	b.WriteString(fmt.Sprintf("EXPORT_BATCH_SIZE=%d\n", cfg.ExportBatchSize))
@@ -346,6 +418,80 @@ func applyMap(cfg *Config, env map[string]string) {
 	if v, ok := env["EMAIL_API"]; ok {
 		cfg.EmailAPI = v
 	}
+	if v, ok := env["DEFAULT_DOMAINS"]; ok {
+		cfg.EmailDefaultDomains = v
+	}
+	if v, ok := env["DUCKMAIL_API_BASE"]; ok {
+		cfg.DuckMailBase = v
+	}
+	if v, ok := env["DUCKMAIL_API_KEY"]; ok {
+		cfg.DuckMailKey = v
+	}
+	if v, ok := env["CLOUDFLARE_API_BASE"]; ok {
+		cfg.CloudflareBase = v
+	}
+	if v, ok := env["CLOUDFLARE_API_KEY"]; ok {
+		cfg.CloudflareKey = v
+	}
+	if v, ok := env["CLOUDFLARE_AUTH_MODE"]; ok {
+		cfg.CloudflareAuthMode = v
+	}
+	if v, ok := env["CLOUDFLARE_CUSTOM_AUTH"]; ok {
+		cfg.CloudflareCustomAuth = v
+	}
+	if v, ok := env["CLOUDFLARE_RANDOMIZE_SUBDOMAIN"]; ok {
+		cfg.CloudflareRandomizeSubdomain = truthy(v)
+	}
+	if v, ok := env["CLOUDMAIL_URL"]; ok {
+		cfg.CloudMailURL = v
+	}
+	if v, ok := env["CLOUDMAIL_ADMIN_EMAIL"]; ok {
+		cfg.CloudMailAdminEmail = v
+	}
+	if v, ok := env["CLOUDMAIL_PASSWORD"]; ok {
+		cfg.CloudMailPassword = v
+	}
+	if v, ok := env["MAILNEST_API_KEY"]; ok {
+		cfg.MailNestKey = v
+	}
+	if v, ok := env["MAILNEST_PROJECT_CODE"]; ok {
+		cfg.MailNestProjectCode = v
+	}
+	if v, ok := env["MOEMAIL_API_BASE"]; ok {
+		cfg.MoeMailBase = v
+	}
+	if v, ok := env["MOEMAIL_API_KEY"]; ok {
+		cfg.MoeMailKey = v
+	}
+	if v, ok := env["MOEMAIL_DOMAIN"]; ok {
+		cfg.MoeMailDomain = v
+	}
+	if v, ok := env["MOEMAIL_EXPIRY_MS"]; ok {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.MoeMailExpiryMS = n
+		}
+	}
+	if v, ok := env["YYDS_API_KEY"]; ok {
+		cfg.YYDSKey = v
+	}
+	if v, ok := env["YYDS_JWT"]; ok {
+		cfg.YYDSJWT = v
+	}
+	if v, ok := env["YYDS_DEFAULT_DOMAIN"]; ok {
+		cfg.YYDSDomain = v
+	}
+	if v, ok := env["BRIDGE_REG_FACTORY_ROOT"]; ok {
+		cfg.BridgeRegFactoryRoot = v
+	}
+	if v, ok := env["BRIDGE_GROK_PANEL_ROOT"]; ok {
+		cfg.BridgeGrokPanelRoot = v
+	}
+	if v, ok := env["BRIDGE_OUTLOOK_POOL_DIR"]; ok {
+		cfg.BridgeOutlookPoolDir = v
+	}
+	if v, ok := env["BRIDGE_PYTHON"]; ok {
+		cfg.BridgePythonExe = v
+	}
 	if v, ok := env["CLEARANCE_ENABLED"]; ok {
 		cfg.ClearanceEnabled = truthy(v)
 	}
@@ -367,12 +513,29 @@ func applyMap(cfg *Config, env map[string]string) {
 	if v, ok := env["LITE_SOLVER_URL"]; ok {
 		cfg.LiteSolverURL = v
 	}
+	if v, ok := env["TURNSTILE_CHROME_PATH"]; ok {
+		cfg.TurnstileChromePath = v
+	}
+	if v, ok := env["TURNSTILE_PYTHON"]; ok {
+		cfg.TurnstilePython = v
+	}
+	if v, ok := env["TURNSTILE_SCRIPT"]; ok {
+		cfg.TurnstileScript = v
+	}
+	if v, ok := env["TURNSTILE_INJECT_CLEARANCE"]; ok {
+		cfg.TurnstileInjectClearance = truthy(v)
+	}
 	if v, ok := env["PROTOCOL_HTTP"]; ok {
 		cfg.ProtocolHTTP = truthy(v)
 	}
-	if v, ok := env["HTTP_POOL_SIZE"]; ok {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.HTTPPoolSize = n
+	if v, ok := env["OAUTH_MIN_INTERVAL_SEC"]; ok {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.OAuthMinIntervalSec = n
+		}
+	}
+	if v, ok := env["OAUTH_RETRY_SEC"]; ok {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.OAuthRetrySec = n
 		}
 	}
 	if v, ok := env["TEMPMAIL_LOL_RETRIES"]; ok {

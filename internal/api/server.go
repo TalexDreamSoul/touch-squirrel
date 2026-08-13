@@ -640,7 +640,7 @@ func (s *Server) handleBridgeStart(w http.ResponseWriter, r *http.Request, targe
 		"run_id": runID,
 		"target": target,
 		"plugin": pluginID,
-		"type":   "github",
+		"type":   pluginID,
 		"log":    logPath,
 		"output": outputDir,
 	})
@@ -979,98 +979,174 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// redact secrets
 	view := map[string]any{
-		"email_mode":                   string(cfg.EmailMode),
-		"email_domain":                 cfg.EmailDomain,
-		"email_api":                    cfg.EmailAPI,
-		"clearance_enabled":            cfg.ClearanceEnabled,
-		"register_proxy":               cfg.RegisterProxy,
-		"flaresolverr_url":             cfg.FlareSolverrURL,
-		"clearance_proxy":              cfg.ClearanceProxy,
-		"clearance_urls":               cfg.ClearanceURLs,
-		"turnstile_provider":           cfg.TurnstileProvider,
-		"protocol_http":                cfg.ProtocolHTTP,
-		"http_pool_size":               cfg.HTTPPoolSize,
-		"tempmail_lol_retries":         cfg.TempmailLOLRetries,
-		"tempmail_lol_min_interval_ms": cfg.TempmailLOLIntervalMS,
-		"http_proxy":                   cfg.HTTPProxy,
-		"https_proxy":                  cfg.HTTPSProxy,
-		"no_proxy":                     cfg.NoProxy,
-		"resin_proxy":                  cfg.ResinProxy,
-		"resin_token_set":              strings.TrimSpace(cfg.ResinToken) != "",
-		"resin_platform":               cfg.ResinPlatform,
-		"mail_router_url":              cfg.MailRouterURL,
-		"mail_router_api_key_set":      strings.TrimSpace(cfg.MailRouterAPIKey) != "",
-		"mail_router_domain":           cfg.MailRouterDomain,
-		"probe_enabled":                cfg.ProbeEnabled,
-		"physical_cap":                 cfg.PhysicalCap,
-		"cpa_upload_enabled":           cfg.CPAUploadEnabled,
-		"cpa_management_base":          cfg.CPAManagementBase,
-		"cpa_management_key_set":       strings.TrimSpace(cfg.CPAManagementKey) != "",
-		"cpa_management_key_masked":    transfer.MaskKey(cfg.CPAManagementKey),
-		"cpa_upload_name_template":     cfg.CPAUploadNameTemplate,
-		"upload_concurrency":           cfg.UploadConcurrency,
-		"upload_batch_size":            cfg.UploadBatchSize,
-		"export_batch_size":            cfg.ExportBatchSize,
-		"export_concurrency":           cfg.ExportConcurrency,
-		"patrol_enabled":               cfg.PatrolEnabled,
-		"patrol_interval_min":          cfg.PatrolIntervalMin,
-		"patrol_deep_probe":            cfg.PatrolDeepProbe,
-		"patrol_concurrency":           cfg.PatrolConcurrency,
-		"quota_per_account":            cfg.QuotaPerAccount,
-		"refill_enabled":               cfg.RefillEnabled,
-		"refill_min_healthy":           cfg.RefillMinHealthy,
-		"refill_batch":                 cfg.RefillBatch,
-		"refill_cooldown_min":          cfg.RefillCooldownMin,
-		"refill_daily_cap":             cfg.RefillDailyCap,
-		"cleanup_quota_enabled":        cfg.CleanupQuotaEnabled,
-		"cleanup_on_patrol":            cfg.CleanupOnPatrol,
-		"cleanup_backup":               cfg.CleanupBackup,
-		"cleanup_dry_run":              cfg.CleanupDryRun,
-		"cluster_role":                 cfg.ClusterRole,
-		"cluster_node_name":            cfg.ClusterNodeName,
-		"cluster_public_token_set":     strings.TrimSpace(cfg.ClusterPublicToken) != "",
-		"cluster_master_url":           cfg.ClusterMasterURL,
-		"cluster_master_urls":          maskMasterURLsString(cfg),
-		"cluster_master_endpoints":     maskMasterEndpoints(cfg),
-		"cluster_status_password_set":  strings.TrimSpace(cfg.ClusterStatusPassword) != "",
-		"cluster_heartbeat_sec":        cfg.ClusterHeartbeatSec,
-		"cluster_pool_target":          cfg.ClusterPoolTarget,
-		"cluster_assign_min":           cfg.ClusterAssignMin,
-		"cluster_assign_max":           cfg.ClusterAssignMax,
-		"cluster_auto_register":        cfg.ClusterAutoRegister,
-		"cluster_auto_upload":          cfg.ClusterAutoUpload,
-		"cluster_share_pool_list":      cfg.ClusterSharePoolList,
-		"cluster_share_pool_pull":      cfg.ClusterSharePoolPull,
-		"cluster_share_infrastructure": cfg.ClusterShareInfrastructure,
-		"local_pool_auto_import":       cfg.LocalPoolAutoImport,
-		"local_pool_auto_sync":         cfg.LocalPoolAutoSync,
+		"email_mode":                     string(cfg.EmailMode),
+		"email_domain":                   cfg.EmailDomain,
+		"email_api":                      cfg.EmailAPI,
+		"email_default_domains":          cfg.EmailDefaultDomains,
+		"duckmail_base":                  cfg.DuckMailBase,
+		"duckmail_key_set":               strings.TrimSpace(cfg.DuckMailKey) != "",
+		"cloudflare_base":                cfg.CloudflareBase,
+		"cloudflare_key_set":             strings.TrimSpace(cfg.CloudflareKey) != "",
+		"cloudflare_auth_mode":           cfg.CloudflareAuthMode,
+		"cloudflare_custom_auth_set":     strings.TrimSpace(cfg.CloudflareCustomAuth) != "",
+		"cloudflare_randomize_subdomain": cfg.CloudflareRandomizeSubdomain,
+		"cloudmail_url":                  cfg.CloudMailURL,
+		"cloudmail_admin_email":          cfg.CloudMailAdminEmail,
+		"cloudmail_password_set":         strings.TrimSpace(cfg.CloudMailPassword) != "",
+		"mailnest_key_set":               strings.TrimSpace(cfg.MailNestKey) != "",
+		"mailnest_project_code":          cfg.MailNestProjectCode,
+		"moemail_base":                   cfg.MoeMailBase,
+		"moemail_key_set":                strings.TrimSpace(cfg.MoeMailKey) != "",
+		"moemail_domain":                 cfg.MoeMailDomain,
+		"moemail_expiry_ms":              cfg.MoeMailExpiryMS,
+		"yyds_key_set":                   strings.TrimSpace(cfg.YYDSKey) != "",
+		"yyds_jwt_set":                   strings.TrimSpace(cfg.YYDSJWT) != "",
+		"yyds_domain":                    cfg.YYDSDomain,
+		"clearance_enabled":              cfg.ClearanceEnabled,
+		"register_proxy":                 cfg.RegisterProxy,
+		"flaresolverr_url":               cfg.FlareSolverrURL,
+		"clearance_proxy":                cfg.ClearanceProxy,
+		"clearance_urls":                 cfg.ClearanceURLs,
+		"turnstile_provider":             cfg.TurnstileProvider,
+		"lite_solver_url":                cfg.LiteSolverURL,
+		"turnstile_chrome_path":          cfg.TurnstileChromePath,
+		"turnstile_python":               cfg.TurnstilePython,
+		"turnstile_script":               cfg.TurnstileScript,
+		"turnstile_inject_clearance":     cfg.TurnstileInjectClearance,
+		"protocol_http":                  cfg.ProtocolHTTP,
+		"http_pool_size":                 cfg.HTTPPoolSize,
+		"oauth_min_interval_sec":         cfg.OAuthMinIntervalSec,
+		"oauth_retry_sec":                cfg.OAuthRetrySec,
+		"tempmail_lol_retries":           cfg.TempmailLOLRetries,
+		"tempmail_lol_min_interval_ms":   cfg.TempmailLOLIntervalMS,
+		"http_proxy":                     cfg.HTTPProxy,
+		"https_proxy":                    cfg.HTTPSProxy,
+		"no_proxy":                       cfg.NoProxy,
+		"resin_proxy":                    cfg.ResinProxy,
+		"resin_token_set":                strings.TrimSpace(cfg.ResinToken) != "",
+		"resin_platform":                 cfg.ResinPlatform,
+		"mail_router_url":                cfg.MailRouterURL,
+		"mail_router_api_key_set":        strings.TrimSpace(cfg.MailRouterAPIKey) != "",
+		"mail_router_domain":             cfg.MailRouterDomain,
+		"bridge_reg_factory_root":        cfg.BridgeRegFactoryRoot,
+		"bridge_grok_panel_root":         cfg.BridgeGrokPanelRoot,
+		"bridge_outlook_pool_dir":        cfg.BridgeOutlookPoolDir,
+		"bridge_python":                  cfg.BridgePythonExe,
+		"probe_enabled":                  cfg.ProbeEnabled,
+		"physical_cap":                   cfg.PhysicalCap,
+		"cpa_upload_enabled":             cfg.CPAUploadEnabled,
+		"cpa_management_base":            cfg.CPAManagementBase,
+		"cpa_management_key_set":         strings.TrimSpace(cfg.CPAManagementKey) != "",
+		"cpa_management_key_masked":      transfer.MaskKey(cfg.CPAManagementKey),
+		"cpa_upload_name_template":       cfg.CPAUploadNameTemplate,
+		"cpa_upload_timeout_sec":         cfg.CPAUploadTimeoutSec,
+		"cpa_upload_retries":             cfg.CPAUploadRetries,
+		"cpa_upload_verify":              cfg.CPAUploadVerify,
+		"cpa_upload_mode":                cfg.CPAUploadMode,
+		"upload_concurrency":             cfg.UploadConcurrency,
+		"upload_batch_size":              cfg.UploadBatchSize,
+		"export_batch_size":              cfg.ExportBatchSize,
+		"export_concurrency":             cfg.ExportConcurrency,
+		"patrol_enabled":                 cfg.PatrolEnabled,
+		"patrol_interval_min":            cfg.PatrolIntervalMin,
+		"patrol_deep_probe":              cfg.PatrolDeepProbe,
+		"patrol_concurrency":             cfg.PatrolConcurrency,
+		"quota_per_account":              cfg.QuotaPerAccount,
+		"refill_enabled":                 cfg.RefillEnabled,
+		"refill_min_healthy":             cfg.RefillMinHealthy,
+		"refill_batch":                   cfg.RefillBatch,
+		"refill_cooldown_min":            cfg.RefillCooldownMin,
+		"refill_daily_cap":               cfg.RefillDailyCap,
+		"cleanup_quota_enabled":          cfg.CleanupQuotaEnabled,
+		"cleanup_on_patrol":              cfg.CleanupOnPatrol,
+		"cleanup_backup":                 cfg.CleanupBackup,
+		"cleanup_dry_run":                cfg.CleanupDryRun,
+		"cluster_role":                   cfg.ClusterRole,
+		"cluster_node_name":              cfg.ClusterNodeName,
+		"cluster_public_token_set":       strings.TrimSpace(cfg.ClusterPublicToken) != "",
+		"cluster_master_url":             cfg.ClusterMasterURL,
+		"cluster_master_urls":            maskMasterURLsString(cfg),
+		"cluster_master_endpoints":       maskMasterEndpoints(cfg),
+		"cluster_status_password_set":    strings.TrimSpace(cfg.ClusterStatusPassword) != "",
+		"cluster_heartbeat_sec":          cfg.ClusterHeartbeatSec,
+		"cluster_pool_target":            cfg.ClusterPoolTarget,
+		"cluster_assign_min":             cfg.ClusterAssignMin,
+		"cluster_assign_max":             cfg.ClusterAssignMax,
+		"cluster_auto_register":          cfg.ClusterAutoRegister,
+		"cluster_auto_upload":            cfg.ClusterAutoUpload,
+		"cluster_share_pool_list":        cfg.ClusterSharePoolList,
+		"cluster_share_pool_pull":        cfg.ClusterSharePoolPull,
+		"cluster_share_infrastructure":   cfg.ClusterShareInfrastructure,
+		"local_pool_auto_import":         cfg.LocalPoolAutoImport,
+		"local_pool_auto_sync":           cfg.LocalPoolAutoSync,
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "config": view})
 }
 
 type configUpdate struct {
-	EmailMode         *string `json:"email_mode"`
-	EmailDomain       *string `json:"email_domain"`
-	EmailAPI          *string `json:"email_api"`
-	ClearanceEnabled  *bool   `json:"clearance_enabled"`
-	RegisterProxy     *string `json:"register_proxy"`
-	FlareSolverrURL   *string `json:"flaresolverr_url"`
-	ClearanceProxy    *string `json:"clearance_proxy"`
-	TurnstileProvider *string `json:"turnstile_provider"`
-	HTTPPoolSize      *int    `json:"http_pool_size"`
-	ProbeEnabled      *bool   `json:"probe_enabled"`
-	PhysicalCap       *int    `json:"physical_cap"`
-	CPAUploadEnabled  *bool   `json:"cpa_upload_enabled"`
-	CPAManagementBase *string `json:"cpa_management_base"`
-	CPAManagementKey  *string `json:"cpa_management_key"`
-	HTTPProxy         *string `json:"http_proxy"`
-	HTTPSProxy        *string `json:"https_proxy"`
-	ResinProxy        *string `json:"resin_proxy"`
-	ResinToken        *string `json:"resin_token"`
-	ResinPlatform     *string `json:"resin_platform"`
-	MailRouterURL     *string `json:"mail_router_url"`
-	MailRouterAPIKey  *string `json:"mail_router_api_key"`
-	MailRouterDomain  *string `json:"mail_router_domain"`
+	EmailMode                    *string  `json:"email_mode"`
+	EmailDomain                  *string  `json:"email_domain"`
+	EmailAPI                     *string  `json:"email_api"`
+	EmailDefaultDomains          *string  `json:"email_default_domains"`
+	DuckMailBase                 *string  `json:"duckmail_base"`
+	DuckMailKey                  *string  `json:"duckmail_key"`
+	CloudflareBase               *string  `json:"cloudflare_base"`
+	CloudflareKey                *string  `json:"cloudflare_key"`
+	CloudflareAuthMode           *string  `json:"cloudflare_auth_mode"`
+	CloudflareCustomAuth         *string  `json:"cloudflare_custom_auth"`
+	CloudflareRandomizeSubdomain *bool    `json:"cloudflare_randomize_subdomain"`
+	CloudMailURL                 *string  `json:"cloudmail_url"`
+	CloudMailAdminEmail          *string  `json:"cloudmail_admin_email"`
+	CloudMailPassword            *string  `json:"cloudmail_password"`
+	MailNestKey                  *string  `json:"mailnest_key"`
+	MailNestProjectCode          *string  `json:"mailnest_project_code"`
+	MoeMailBase                  *string  `json:"moemail_base"`
+	MoeMailKey                   *string  `json:"moemail_key"`
+	MoeMailDomain                *string  `json:"moemail_domain"`
+	MoeMailExpiryMS              *int64   `json:"moemail_expiry_ms"`
+	YYDSKey                      *string  `json:"yyds_key"`
+	YYDSJWT                      *string  `json:"yyds_jwt"`
+	YYDSDomain                   *string  `json:"yyds_domain"`
+	ClearanceEnabled             *bool    `json:"clearance_enabled"`
+	RegisterProxy                *string  `json:"register_proxy"`
+	FlareSolverrURL              *string  `json:"flaresolverr_url"`
+	ClearanceProxy               *string  `json:"clearance_proxy"`
+	ClearanceURLs                *string  `json:"clearance_urls"`
+	TurnstileProvider            *string  `json:"turnstile_provider"`
+	LiteSolverURL                *string  `json:"lite_solver_url"`
+	TurnstileChromePath          *string  `json:"turnstile_chrome_path"`
+	TurnstilePython              *string  `json:"turnstile_python"`
+	TurnstileScript              *string  `json:"turnstile_script"`
+	TurnstileInjectClearance     *bool    `json:"turnstile_inject_clearance"`
+	ProtocolHTTP                 *bool    `json:"protocol_http"`
+	HTTPPoolSize                 *int     `json:"http_pool_size"`
+	OAuthMinInterval             *float64 `json:"oauth_min_interval_sec"`
+	OAuthRetry                   *float64 `json:"oauth_retry_sec"`
+	TempmailLOLRetries           *int     `json:"tempmail_lol_retries"`
+	TempmailLOLIntervalMS        *int     `json:"tempmail_lol_min_interval_ms"`
+	ProbeEnabled                 *bool    `json:"probe_enabled"`
+	PhysicalCap                  *int     `json:"physical_cap"`
+	CPAUploadEnabled             *bool    `json:"cpa_upload_enabled"`
+	CPAManagementBase            *string  `json:"cpa_management_base"`
+	CPAManagementKey             *string  `json:"cpa_management_key"`
+	CPAUploadTimeoutSec          *int     `json:"cpa_upload_timeout_sec"`
+	CPAUploadRetries             *int     `json:"cpa_upload_retries"`
+	CPAUploadNameTemplate        *string  `json:"cpa_upload_name_template"`
+	CPAUploadVerify              *bool    `json:"cpa_upload_verify"`
+	CPAUploadMode                *string  `json:"cpa_upload_mode"`
+	HTTPProxy                    *string  `json:"http_proxy"`
+	HTTPSProxy                   *string  `json:"https_proxy"`
+	NoProxy                      *string  `json:"no_proxy"`
+	ResinProxy                   *string  `json:"resin_proxy"`
+	ResinToken                   *string  `json:"resin_token"`
+	ResinPlatform                *string  `json:"resin_platform"`
+	MailRouterURL                *string  `json:"mail_router_url"`
+	MailRouterAPIKey             *string  `json:"mail_router_api_key"`
+	MailRouterDomain             *string  `json:"mail_router_domain"`
+	BridgeRegFactoryRoot         *string  `json:"bridge_reg_factory_root"`
+	BridgeGrokPanelRoot          *string  `json:"bridge_grok_panel_root"`
+	BridgeOutlookPoolDir         *string  `json:"bridge_outlook_pool_dir"`
+	BridgePythonExe              *string  `json:"bridge_python"`
 
 	UploadConcurrency *int `json:"upload_concurrency"`
 	UploadBatchSize   *int `json:"upload_batch_size"`
@@ -1131,20 +1207,65 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if u.MailRouterURL != nil {
-		if err := validateHTTPURL("mail_router_url", *u.MailRouterURL); err != nil {
-			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
-			return
+	for _, field := range []struct {
+		name  string
+		value *string
+	}{
+		{"duckmail_key", u.DuckMailKey},
+		{"cloudflare_key", u.CloudflareKey},
+		{"cloudflare_custom_auth", u.CloudflareCustomAuth},
+		{"cloudmail_password", u.CloudMailPassword},
+		{"mailnest_key", u.MailNestKey},
+		{"moemail_key", u.MoeMailKey},
+		{"yyds_key", u.YYDSKey},
+		{"yyds_jwt", u.YYDSJWT},
+		{"resin_token", u.ResinToken},
+		{"mail_router_api_key", u.MailRouterAPIKey},
+		{"cpa_management_key", u.CPAManagementKey},
+		{"cluster_public_token", u.ClusterPublicToken},
+		{"cluster_status_password", u.ClusterStatusPassword},
+		{"email_mode", u.EmailMode},
+		{"email_domain", u.EmailDomain},
+		{"email_api", u.EmailAPI},
+		{"email_default_domains", u.EmailDefaultDomains},
+		{"duckmail_base", u.DuckMailBase},
+		{"cloudflare_base", u.CloudflareBase},
+		{"cloudflare_auth_mode", u.CloudflareAuthMode},
+		{"cloudmail_url", u.CloudMailURL},
+		{"cloudmail_admin_email", u.CloudMailAdminEmail},
+		{"mailnest_project_code", u.MailNestProjectCode},
+		{"moemail_base", u.MoeMailBase},
+		{"moemail_domain", u.MoeMailDomain},
+		{"yyds_domain", u.YYDSDomain},
+		{"register_proxy", u.RegisterProxy},
+		{"flaresolverr_url", u.FlareSolverrURL},
+		{"clearance_proxy", u.ClearanceProxy},
+		{"clearance_urls", u.ClearanceURLs},
+		{"turnstile_provider", u.TurnstileProvider},
+		{"lite_solver_url", u.LiteSolverURL},
+		{"turnstile_chrome_path", u.TurnstileChromePath},
+		{"turnstile_python", u.TurnstilePython},
+		{"turnstile_script", u.TurnstileScript},
+		{"http_proxy", u.HTTPProxy},
+		{"https_proxy", u.HTTPSProxy},
+		{"no_proxy", u.NoProxy},
+		{"resin_platform", u.ResinPlatform},
+		{"mail_router_url", u.MailRouterURL},
+		{"mail_router_domain", u.MailRouterDomain},
+		{"bridge_reg_factory_root", u.BridgeRegFactoryRoot},
+		{"bridge_grok_panel_root", u.BridgeGrokPanelRoot},
+		{"bridge_outlook_pool_dir", u.BridgeOutlookPoolDir},
+		{"bridge_python", u.BridgePythonExe},
+		{"cpa_management_base", u.CPAManagementBase},
+		{"cpa_upload_name_template", u.CPAUploadNameTemplate},
+		{"cpa_upload_mode", u.CPAUploadMode},
+		{"cluster_role", u.ClusterRole},
+		{"cluster_node_name", u.ClusterNodeName},
+	} {
+		if field.value == nil {
+			continue
 		}
-	}
-	if u.ResinToken != nil {
-		if err := validateSecretInput("resin_token", *u.ResinToken); err != nil {
-			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
-			return
-		}
-	}
-	if u.MailRouterAPIKey != nil {
-		if err := validateSecretInput("mail_router_api_key", *u.MailRouterAPIKey); err != nil {
+		if err := validateSecretInput(field.name, *field.value); err != nil {
 			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
@@ -1157,6 +1278,66 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if u.EmailAPI != nil {
 		cfg.EmailAPI = *u.EmailAPI
+	}
+	if u.EmailDefaultDomains != nil {
+		cfg.EmailDefaultDomains = strings.TrimSpace(*u.EmailDefaultDomains)
+	}
+	if u.DuckMailBase != nil {
+		cfg.DuckMailBase = strings.TrimRight(strings.TrimSpace(*u.DuckMailBase), "/")
+	}
+	if u.DuckMailKey != nil && strings.TrimSpace(*u.DuckMailKey) != "" {
+		cfg.DuckMailKey = strings.TrimSpace(*u.DuckMailKey)
+	}
+	if u.CloudflareBase != nil {
+		cfg.CloudflareBase = strings.TrimRight(strings.TrimSpace(*u.CloudflareBase), "/")
+	}
+	if u.CloudflareKey != nil && strings.TrimSpace(*u.CloudflareKey) != "" {
+		cfg.CloudflareKey = strings.TrimSpace(*u.CloudflareKey)
+	}
+	if u.CloudflareAuthMode != nil {
+		cfg.CloudflareAuthMode = strings.ToLower(strings.TrimSpace(*u.CloudflareAuthMode))
+	}
+	if u.CloudflareCustomAuth != nil && strings.TrimSpace(*u.CloudflareCustomAuth) != "" {
+		cfg.CloudflareCustomAuth = strings.TrimSpace(*u.CloudflareCustomAuth)
+	}
+	if u.CloudflareRandomizeSubdomain != nil {
+		cfg.CloudflareRandomizeSubdomain = *u.CloudflareRandomizeSubdomain
+	}
+	if u.CloudMailURL != nil {
+		cfg.CloudMailURL = strings.TrimRight(strings.TrimSpace(*u.CloudMailURL), "/")
+	}
+	if u.CloudMailAdminEmail != nil {
+		cfg.CloudMailAdminEmail = strings.TrimSpace(*u.CloudMailAdminEmail)
+	}
+	if u.CloudMailPassword != nil && strings.TrimSpace(*u.CloudMailPassword) != "" {
+		cfg.CloudMailPassword = strings.TrimSpace(*u.CloudMailPassword)
+	}
+	if u.MailNestKey != nil && strings.TrimSpace(*u.MailNestKey) != "" {
+		cfg.MailNestKey = strings.TrimSpace(*u.MailNestKey)
+	}
+	if u.MailNestProjectCode != nil {
+		cfg.MailNestProjectCode = strings.TrimSpace(*u.MailNestProjectCode)
+	}
+	if u.MoeMailBase != nil {
+		cfg.MoeMailBase = strings.TrimRight(strings.TrimSpace(*u.MoeMailBase), "/")
+	}
+	if u.MoeMailKey != nil && strings.TrimSpace(*u.MoeMailKey) != "" {
+		cfg.MoeMailKey = strings.TrimSpace(*u.MoeMailKey)
+	}
+	if u.MoeMailDomain != nil {
+		cfg.MoeMailDomain = strings.TrimSpace(*u.MoeMailDomain)
+	}
+	if u.MoeMailExpiryMS != nil {
+		cfg.MoeMailExpiryMS = *u.MoeMailExpiryMS
+	}
+	if u.YYDSKey != nil && strings.TrimSpace(*u.YYDSKey) != "" {
+		cfg.YYDSKey = strings.TrimSpace(*u.YYDSKey)
+	}
+	if u.YYDSJWT != nil && strings.TrimSpace(*u.YYDSJWT) != "" {
+		cfg.YYDSJWT = strings.TrimSpace(*u.YYDSJWT)
+	}
+	if u.YYDSDomain != nil {
+		cfg.YYDSDomain = strings.TrimSpace(*u.YYDSDomain)
 	}
 	if u.ClearanceEnabled != nil {
 		cfg.ClearanceEnabled = *u.ClearanceEnabled
@@ -1177,11 +1358,44 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if u.ClearanceProxy != nil {
 		cfg.ClearanceProxy = *u.ClearanceProxy
 	}
+	if u.ClearanceURLs != nil {
+		cfg.ClearanceURLs = strings.TrimSpace(*u.ClearanceURLs)
+	}
 	if u.TurnstileProvider != nil {
 		cfg.TurnstileProvider = *u.TurnstileProvider
 	}
+	if u.LiteSolverURL != nil {
+		cfg.LiteSolverURL = strings.TrimRight(strings.TrimSpace(*u.LiteSolverURL), "/")
+	}
+	if u.TurnstileChromePath != nil {
+		cfg.TurnstileChromePath = strings.TrimSpace(*u.TurnstileChromePath)
+	}
+	if u.TurnstilePython != nil {
+		cfg.TurnstilePython = strings.TrimSpace(*u.TurnstilePython)
+	}
+	if u.TurnstileScript != nil {
+		cfg.TurnstileScript = strings.TrimSpace(*u.TurnstileScript)
+	}
+	if u.TurnstileInjectClearance != nil {
+		cfg.TurnstileInjectClearance = *u.TurnstileInjectClearance
+	}
+	if u.ProtocolHTTP != nil {
+		cfg.ProtocolHTTP = *u.ProtocolHTTP
+	}
 	if u.HTTPPoolSize != nil {
 		cfg.HTTPPoolSize = *u.HTTPPoolSize
+	}
+	if u.TempmailLOLRetries != nil {
+		cfg.TempmailLOLRetries = *u.TempmailLOLRetries
+	}
+	if u.TempmailLOLIntervalMS != nil {
+		cfg.TempmailLOLIntervalMS = *u.TempmailLOLIntervalMS
+	}
+	if u.OAuthMinInterval != nil {
+		cfg.OAuthMinIntervalSec = *u.OAuthMinInterval
+	}
+	if u.OAuthRetry != nil {
+		cfg.OAuthRetrySec = *u.OAuthRetry
 	}
 	if u.ProbeEnabled != nil {
 		cfg.ProbeEnabled = *u.ProbeEnabled
@@ -1204,6 +1418,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if u.HTTPSProxy != nil {
 		cfg.HTTPSProxy = *u.HTTPSProxy
 	}
+	if u.NoProxy != nil {
+		cfg.NoProxy = strings.TrimSpace(*u.NoProxy)
+	}
 	if u.ResinProxy != nil {
 		cfg.ResinProxy = strings.TrimSpace(*u.ResinProxy)
 	}
@@ -1221,6 +1438,33 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if u.MailRouterDomain != nil {
 		cfg.MailRouterDomain = strings.TrimSpace(*u.MailRouterDomain)
+	}
+	if u.BridgeRegFactoryRoot != nil {
+		cfg.BridgeRegFactoryRoot = strings.TrimSpace(*u.BridgeRegFactoryRoot)
+	}
+	if u.BridgeGrokPanelRoot != nil {
+		cfg.BridgeGrokPanelRoot = strings.TrimSpace(*u.BridgeGrokPanelRoot)
+	}
+	if u.BridgeOutlookPoolDir != nil {
+		cfg.BridgeOutlookPoolDir = strings.TrimSpace(*u.BridgeOutlookPoolDir)
+	}
+	if u.BridgePythonExe != nil {
+		cfg.BridgePythonExe = strings.TrimSpace(*u.BridgePythonExe)
+	}
+	if u.CPAUploadTimeoutSec != nil {
+		cfg.CPAUploadTimeoutSec = *u.CPAUploadTimeoutSec
+	}
+	if u.CPAUploadRetries != nil {
+		cfg.CPAUploadRetries = *u.CPAUploadRetries
+	}
+	if u.CPAUploadNameTemplate != nil {
+		cfg.CPAUploadNameTemplate = strings.TrimSpace(*u.CPAUploadNameTemplate)
+	}
+	if u.CPAUploadVerify != nil {
+		cfg.CPAUploadVerify = *u.CPAUploadVerify
+	}
+	if u.CPAUploadMode != nil {
+		cfg.CPAUploadMode = strings.TrimSpace(*u.CPAUploadMode)
 	}
 	if u.UploadConcurrency != nil {
 		cfg.UploadConcurrency = *u.UploadConcurrency
@@ -1376,6 +1620,14 @@ func saveConfigWithSecrets(path string, cfg config.Config) error {
 		{"CLUSTER_STATUS_PASSWORD", cfg.ClusterStatusPassword},
 		{"RESIN_TOKEN", cfg.ResinToken},
 		{"MAIL_ROUTER_API_KEY", cfg.MailRouterAPIKey},
+		{"DUCKMAIL_API_KEY", cfg.DuckMailKey},
+		{"CLOUDFLARE_API_KEY", cfg.CloudflareKey},
+		{"CLOUDFLARE_CUSTOM_AUTH", cfg.CloudflareCustomAuth},
+		{"CLOUDMAIL_PASSWORD", cfg.CloudMailPassword},
+		{"MAILNEST_API_KEY", cfg.MailNestKey},
+		{"MOEMAIL_API_KEY", cfg.MoeMailKey},
+		{"YYDS_API_KEY", cfg.YYDSKey},
+		{"YYDS_JWT", cfg.YYDSJWT},
 	} {
 		if strings.TrimSpace(secret.val) == "" {
 			continue

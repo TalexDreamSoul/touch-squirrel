@@ -42,6 +42,14 @@ func TestSaveConfigWithSecretsPreservesAllSecretTypes(t *testing.T) {
 	cfg.ClusterStatusPassword = "status-secret"
 	cfg.ResinToken = "resin-secret"
 	cfg.MailRouterAPIKey = "mail-secret"
+	cfg.DuckMailKey = "duck-secret"
+	cfg.CloudflareKey = "cloudflare-secret"
+	cfg.CloudflareCustomAuth = "custom-auth"
+	cfg.CloudMailPassword = "cloudmail-secret"
+	cfg.MailNestKey = "mailnest-secret"
+	cfg.MoeMailKey = "moemail-secret"
+	cfg.YYDSKey = "yyds-secret"
+	cfg.YYDSJWT = "yyds-jwt"
 	if err := saveConfigWithSecrets(path, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +61,15 @@ func TestSaveConfigWithSecretsPreservesAllSecretTypes(t *testing.T) {
 		got.ClusterPublicToken != cfg.ClusterPublicToken ||
 		got.ClusterStatusPassword != cfg.ClusterStatusPassword ||
 		got.ResinToken != cfg.ResinToken ||
-		got.MailRouterAPIKey != cfg.MailRouterAPIKey {
+		got.MailRouterAPIKey != cfg.MailRouterAPIKey ||
+		got.DuckMailKey != cfg.DuckMailKey ||
+		got.CloudflareKey != cfg.CloudflareKey ||
+		got.CloudflareCustomAuth != cfg.CloudflareCustomAuth ||
+		got.CloudMailPassword != cfg.CloudMailPassword ||
+		got.MailNestKey != cfg.MailNestKey ||
+		got.MoeMailKey != cfg.MoeMailKey ||
+		got.YYDSKey != cfg.YYDSKey ||
+		got.YYDSJWT != cfg.YYDSJWT {
 		t.Fatalf("secret preservation mismatch: %+v", got)
 	}
 }

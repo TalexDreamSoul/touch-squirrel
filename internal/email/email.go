@@ -16,11 +16,11 @@ import (
 )
 
 var bannedDomains = map[string]struct{}{
-	"duckmail.sbs":     {},
-	"web-library.net":  {},
-	"mail.tm":          {},
-	"mail.gw":          {},
-	"baldur.edu.kg":    {},
+	"duckmail.sbs":    {},
+	"web-library.net": {},
+	"mail.tm":         {},
+	"mail.gw":         {},
+	"baldur.edu.kg":   {},
 }
 
 var codeRe = []*regexp.Regexp{
@@ -30,11 +30,12 @@ var codeRe = []*regexp.Regexp{
 }
 
 type Handle struct {
-	Kind     string // lol | mt | custom
+	Kind     string // lol | mt | custom | duckmail | cloudflare | cloudmail | mailnest | moemail | yyds
 	Email    string
 	Password string
 	Token    string
-	Base     string // mail.tm base
+	Base     string // mail.tm / duckmail base
+	ID       string // provider-specific secondary id (moemail email_id, cloudmail accountId)
 }
 
 type Provider struct {
@@ -51,6 +52,28 @@ type Config struct {
 	LOLRetries    int
 	LOLIntervalMS int
 	HTTPClient    *http.Client
+
+	// providers (ported from grok-register-panel)
+	DefaultDomains       string
+	DuckMailBase         string
+	DuckMailKey          string
+	CloudflareBase       string
+	CloudflareKey        string
+	CloudflareAuthMode   string // none | x-api-key | x-admin-auth | query-key | bearer
+	CloudflareCustomAuth string
+	CloudflareRandomize  bool
+	CloudMailURL         string
+	CloudMailAdminEmail  string
+	CloudMailPassword    string
+	MailNestKey          string
+	MailNestProjectCode  string
+	MoeMailBase          string
+	MoeMailKey           string
+	MoeMailDomain        string
+	MoeMailExpiryMS      int64
+	YYDSKey              string
+	YYDSJWT              string
+	YYDSDomain           string
 }
 
 func New(cfg Config) *Provider {
@@ -76,11 +99,30 @@ func randStr(n int) string {
 }
 
 func (p *Provider) Create() (Handle, error) {
-	password := randStr(15)
-	if p.cfg.Mode == config.EmailCustom {
+	switch p.cfg.Mode {
+	case config.EmailCustom:
+		password := randStr(15)
 		email := fmt.Sprintf("oc%s@%s", randStr(10), p.cfg.Domain)
 		return Handle{Kind: "custom", Email: email, Password: password}, nil
+	case config.EmailDuckMail:
+		return p.duckmailCreate()
+	case config.EmailCloudflare:
+		return p.cloudflareCreate()
+	case config.EmailCloudMail:
+		return p.cloudmailCreate()
+	case config.EmailMailNest:
+		return p.mailnestCreate()
+	case config.EmailMoeMail:
+		return p.moemailCreate()
+	case config.EmailYYDS:
+		return p.yydsCreate()
+	default: // EmailTempmail
+		return p.tempmailCreate()
 	}
+}
+
+func (p *Provider) tempmailCreate() (Handle, error) {
+	password := randStr(15)
 	var last error
 	for i := 0; i < p.cfg.LOLRetries; i++ {
 		h, err := p.lolCreate()
@@ -232,73 +274,97 @@ func (p *Provider) PollCode(h Handle, maxWait time.Duration) (string, error) {
 func (p *Provider) fetch(h Handle) (string, error) {
 	switch h.Kind {
 	case "custom":
-		u := strings.TrimRight(p.cfg.API, "/") + "/check/" + url.PathEscape(h.Email)
-		resp, err := p.cfg.HTTPClient.Get(u)
-		if err != nil {
-			return "", err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return "", fmt.Errorf("status %d", resp.StatusCode)
-		}
-		var doc map[string]any
-		_ = json.NewDecoder(resp.Body).Decode(&doc)
-		if c, _ := doc["code"].(string); c != "" {
-			return c, nil
-		}
-		return "", nil
+		return p.fetchCustom(h)
 	case "lol":
-		resp, err := p.cfg.HTTPClient.Get("https://api.tempmail.lol/v2/inbox?token=" + url.QueryEscape(h.Token))
-		if err != nil {
-			return "", err
-		}
-		defer resp.Body.Close()
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-		var data map[string]any
-		_ = json.Unmarshal(body, &data)
-		items, _ := data["emails"].([]any)
-		if items == nil {
-			items, _ = data["messages"].([]any)
-		}
-		var b strings.Builder
-		for _, it := range items {
-			m, _ := it.(map[string]any)
-			if m == nil {
-				continue
-			}
-			fmt.Fprintf(&b, "%v\n%v\n%v\n", m["subject"], m["body"], m["html"])
-		}
-		return b.String(), nil
+		return p.fetchLOL(h)
 	case "mt":
-		req, _ := http.NewRequest(http.MethodGet, h.Base+"/messages", nil)
-		req.Header.Set("Authorization", "Bearer "+h.Token)
-		req.Header.Set("Accept", "application/json")
-		resp, err := p.cfg.HTTPClient.Do(req)
-		if err != nil {
-			return "", err
-		}
-		defer resp.Body.Close()
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-		var data map[string]any
-		_ = json.Unmarshal(body, &data)
-		msgs, _ := data["hydra:member"].([]any)
-		if len(msgs) == 0 {
-			return "", nil
-		}
-		m0, _ := msgs[0].(map[string]any)
-		id, _ := m0["id"].(string)
-		req2, _ := http.NewRequest(http.MethodGet, h.Base+"/messages/"+id, nil)
-		req2.Header.Set("Authorization", "Bearer "+h.Token)
-		resp2, err := p.cfg.HTTPClient.Do(req2)
-		if err != nil {
-			return "", err
-		}
-		defer resp2.Body.Close()
-		b2, _ := io.ReadAll(io.LimitReader(resp2.Body, 2<<20))
-		return string(b2), nil
+		return p.fetchMailTM(h)
+	case "duckmail":
+		return p.fetchDuckMail(h)
+	case "cloudflare":
+		return p.fetchCloudflare(h)
+	case "cloudmail":
+		return p.fetchCloudMail(h)
+	case "mailnest":
+		return p.fetchMailNest(h)
+	case "moemail":
+		return p.fetchMoeMail(h)
+	case "yyds":
+		return p.fetchYYDS(h)
 	default:
 		return "", fmt.Errorf("unknown handle kind")
 	}
+}
+
+func (p *Provider) fetchCustom(h Handle) (string, error) {
+	u := strings.TrimRight(p.cfg.API, "/") + "/check/" + url.PathEscape(h.Email)
+	resp, err := p.cfg.HTTPClient.Get(u)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("status %d", resp.StatusCode)
+	}
+	var doc map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&doc)
+	if c, _ := doc["code"].(string); c != "" {
+		return c, nil
+	}
+	return "", nil
+}
+
+func (p *Provider) fetchLOL(h Handle) (string, error) {
+	resp, err := p.cfg.HTTPClient.Get("https://api.tempmail.lol/v2/inbox?token=" + url.QueryEscape(h.Token))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	var data map[string]any
+	_ = json.Unmarshal(body, &data)
+	items, _ := data["emails"].([]any)
+	if items == nil {
+		items, _ = data["messages"].([]any)
+	}
+	var b strings.Builder
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		if m == nil {
+			continue
+		}
+		fmt.Fprintf(&b, "%v\n%v\n%v\n", m["subject"], m["body"], m["html"])
+	}
+	return b.String(), nil
+}
+
+func (p *Provider) fetchMailTM(h Handle) (string, error) {
+	req, _ := http.NewRequest(http.MethodGet, h.Base+"/messages", nil)
+	req.Header.Set("Authorization", "Bearer "+h.Token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := p.cfg.HTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	var data map[string]any
+	_ = json.Unmarshal(body, &data)
+	msgs, _ := data["hydra:member"].([]any)
+	if len(msgs) == 0 {
+		return "", nil
+	}
+	m0, _ := msgs[0].(map[string]any)
+	id, _ := m0["id"].(string)
+	req2, _ := http.NewRequest(http.MethodGet, h.Base+"/messages/"+id, nil)
+	req2.Header.Set("Authorization", "Bearer "+h.Token)
+	resp2, err := p.cfg.HTTPClient.Do(req2)
+	if err != nil {
+		return "", err
+	}
+	defer resp2.Body.Close()
+	b2, _ := io.ReadAll(io.LimitReader(resp2.Body, 2<<20))
+	return string(b2), nil
 }
 
 func extractCode(text string) string {

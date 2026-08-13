@@ -103,10 +103,14 @@ func (l *Lite) Solve(ctx context.Context, siteKey, pageURL string) (string, erro
 
 // Options for New().
 type Options struct {
-	Provider string
-	LiteURL  string
-	Proxy    string
-	Clear    *clearance.Manager
+	Provider        string
+	LiteURL         string
+	Proxy           string
+	Clear           *clearance.Manager
+	ChromePath      string
+	Python          string
+	ScriptPath      string
+	InjectClearance bool
 }
 
 // chain tries primary then fallback.
@@ -167,15 +171,23 @@ func New(opts Options) Provider {
 		return NewBrowser(opts.Proxy, opts.Clear)
 	case "browser", "local", "playwright":
 		// Prefer Playwright (same as original). Fall back to chromedp if script missing.
-		pw := NewPlaywrightBridge(opts.Proxy, opts.Clear)
+		pw := NewPlaywrightBridgeWithOptions(opts.Proxy, opts.Clear, opts.ScriptPath, opts.Python, opts.ChromePath, opts.InjectClearance)
 		if pw.ScriptPath != "" && pw.Python != "" {
+			browserProvider := NewBrowser(opts.Proxy, opts.Clear)
+			if opts.ChromePath != "" {
+				browserProvider.ExecPath = opts.ChromePath
+			}
 			return &chain{
 				name: "browser",
-				list: []Provider{pw, NewBrowser(opts.Proxy, opts.Clear)},
+				list: []Provider{pw, browserProvider},
 			}
 		}
-		return NewBrowser(opts.Proxy, opts.Clear)
+		browserProvider := NewBrowser(opts.Proxy, opts.Clear)
+		if opts.ChromePath != "" {
+			browserProvider.ExecPath = opts.ChromePath
+		}
+		return browserProvider
 	default:
-		return NewPlaywrightBridge(opts.Proxy, opts.Clear)
+		return NewPlaywrightBridgeWithOptions(opts.Proxy, opts.Clear, opts.ScriptPath, opts.Python, opts.ChromePath, opts.InjectClearance)
 	}
 }

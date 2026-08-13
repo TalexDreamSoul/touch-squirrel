@@ -84,21 +84,16 @@ services:
         condition: service_started
       flaresolverr:
         condition: service_started
+    # Runtime settings are persisted in /data/config.env and managed by the panel.
+    # Only process/bootstrap variables belong here.
     environment:
       GROK_HOME: /data
       PANEL_ADDR: ":8787"
       PANEL_TOKEN: ${PANEL_TOKEN:-local-dev-token}
-      # outbound via privoxy (docker DNS names)
-      REGISTER_PROXY: http://privoxy:8118
-      FLARESOLVERR_URL: http://flaresolverr:8191
-      CLEARANCE_PROXY: http://privoxy:8118
-      CLEARANCE_ENABLED: "1"
-      HTTP_PROXY: http://privoxy:8118
-      HTTPS_PROXY: http://privoxy:8118
-      NO_PROXY: 127.0.0.1,localhost,privoxy,flaresolverr,warp-proxy,panel
-      EMAIL_MODE: ${EMAIL_MODE:-tempmail}
-      # Only inject CPA_* when set in .env — empty strings must not clobber /data/config.env intent in tooling
-      CPA_UPLOAD_ENABLED: ${CPA_UPLOAD_ENABLED:-0}
+      # Passive discovery credentials intentionally remain deploy-time secrets.
+      FOFA_EMAIL: ${FOFA_EMAIL:-}
+      FOFA_API_KEY: ${FOFA_API_KEY:-}
+      SHODAN_API_KEY: ${SHODAN_API_KEY:-}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - grok-data:/data

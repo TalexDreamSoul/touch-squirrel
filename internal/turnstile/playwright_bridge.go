@@ -18,23 +18,40 @@ import (
 // PlaywrightBridge shells out to scripts/turnstile_mint.py (Playwright+CloakBrowser),
 // matching the original grok_register mint path. chromedp alone is often blocked by CF.
 type PlaywrightBridge struct {
-	ScriptPath string
-	Python     string
-	Proxy      string
-	Clear      *clearance.Manager
-	Timeout    time.Duration
+	ScriptPath      string
+	Python          string
+	ChromePath      string
+	InjectClearance bool
+	Proxy           string
+	Clear           *clearance.Manager
+	Timeout         time.Duration
 
 	// serialize mint — original holds Physical_Sem for one solve
 	mu sync.Mutex
 }
 
 func NewPlaywrightBridge(proxy string, cm *clearance.Manager) *PlaywrightBridge {
+	return NewPlaywrightBridgeWithOptions(proxy, cm, "", "", "", injectClearance())
+}
+
+func NewPlaywrightBridgeWithOptions(proxy string, cm *clearance.Manager, scriptPath, python, chromePath string, injectClearance bool) *PlaywrightBridge {
+	if strings.TrimSpace(scriptPath) == "" {
+		scriptPath = findMintScript()
+	}
+	if strings.TrimSpace(python) == "" {
+		python = findPython()
+	}
+	if strings.TrimSpace(chromePath) == "" {
+		chromePath = strings.TrimSpace(os.Getenv("CHROME_PATH"))
+	}
 	return &PlaywrightBridge{
-		ScriptPath: findMintScript(),
-		Python:     findPython(),
-		Proxy:      proxy,
-		Clear:      cm,
-		Timeout:    100 * time.Second,
+		ScriptPath:      scriptPath,
+		Python:          python,
+		ChromePath:      chromePath,
+		InjectClearance: injectClearance,
+		Proxy:           proxy,
+		Clear:           cm,
+		Timeout:         100 * time.Second,
 	}
 }
 
@@ -75,7 +92,7 @@ func (p *PlaywrightBridge) Solve(ctx context.Context, siteKey, pageURL string) (
 	// Manual mint without them succeeds; injecting FS UA+cookies into CloakBrowser
 	// often yields iframes=0 / no token (fingerprint + session mismatch).
 	// Opt-in: GROK_TURNSTILE_INJECT_CLEARANCE=1
-	if injectClearance() && p.Clear != nil {
+	if p.InjectClearance && p.Clear != nil {
 		if h := p.Clear.CookieHeader(); h != "" {
 			args = append(args, "--cookie", h)
 		}
@@ -83,7 +100,7 @@ func (p *PlaywrightBridge) Solve(ctx context.Context, siteKey, pageURL string) (
 			args = append(args, "--ua", ua)
 		}
 	}
-	if chrome := strings.TrimSpace(os.Getenv("CHROME_PATH")); chrome != "" {
+	if chrome := strings.TrimSpace(p.ChromePath); chrome != "" {
 		args = append(args, "--chrome", chrome)
 	}
 
