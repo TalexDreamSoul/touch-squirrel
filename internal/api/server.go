@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +24,7 @@ import (
 	"github.com/grok-free-register/grok-reg/internal/cpa"
 	"github.com/grok-free-register/grok-reg/internal/daemon"
 	"github.com/grok-free-register/grok-reg/internal/home"
+	"github.com/grok-free-register/grok-reg/internal/hunter"
 	"github.com/grok-free-register/grok-reg/internal/jobs"
 	"github.com/grok-free-register/grok-reg/internal/localpool"
 	"github.com/grok-free-register/grok-reg/internal/patrol"
@@ -50,6 +52,7 @@ type Server struct {
 	status    *statuspage.Service
 	localPool *localpool.Service
 	accounts  *acctpool.Store
+	hunter    *hunter.Service
 }
 
 func New(opt Options) *Server {
@@ -128,6 +131,11 @@ func New(opt Options) *Server {
 		}
 	})
 	s.localPool = localpool.New(opt.Paths.LocalPool)
+	hunterPath := opt.Paths.HunterFile
+	if hunterPath == "" {
+		hunterPath = filepath.Join(opt.Paths.Root, "hunter.json")
+	}
+	s.hunter = hunter.NewService(hunterPath)
 	if st, err := acctpool.Open(opt.Paths.AccountsDB); err == nil {
 		s.accounts = st
 		// one-shot auto-migration of legacy local-pool + tavily keys
@@ -289,6 +297,18 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/notifications/{id}", s.handleNotifyDelete)
 	s.mux.HandleFunc("POST /api/notifications/{id}/test", s.handleNotifyTest)
 
+	// hunter: passive discovery, authorized read-only probes, reviewed disclosure mail
+	s.mux.HandleFunc("GET /api/hunter", s.handleHunterSnapshot)
+	s.mux.HandleFunc("PUT /api/hunter/config", s.handleHunterConfig)
+	s.mux.HandleFunc("POST /api/hunter/discover", s.handleHunterDiscover)
+	s.mux.HandleFunc("POST /api/hunter/discover-network", s.handleHunterDiscoverNetwork)
+	s.mux.HandleFunc("POST /api/hunter/import", s.handleHunterImport)
+	s.mux.HandleFunc("PUT /api/hunter/findings/{id}/status", s.handleHunterFindingStatus)
+	s.mux.HandleFunc("POST /api/hunter/findings/{id}/probe", s.handleHunterProbe)
+	s.mux.HandleFunc("POST /api/hunter/drafts", s.handleHunterDraftCreate)
+	s.mux.HandleFunc("POST /api/hunter/drafts/{id}/approve", s.handleHunterDraftApprove)
+	s.mux.HandleFunc("POST /api/hunter/drafts/{id}/send", s.handleHunterDraftSend)
+
 	if s.opt.WebFS != nil {
 		// Next export lives under out/ inside embed.FS
 		staticRoot := s.opt.WebFS
@@ -362,6 +382,10 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			return
 		}
 		if s.opt.Token == "" {
+			if strings.HasPrefix(r.URL.Path, "/api/hunter") && !isLoopbackRemote(r.RemoteAddr) {
+				writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "hunter API requires PANEL_TOKEN for non-loopback access"})
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -375,6 +399,15 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isLoopbackRemote(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && ip.IsLoopback()
 }
 
 func extractToken(r *http.Request) string {

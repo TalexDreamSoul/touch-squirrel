@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   ArchiveIcon,
   BellIcon,
+  BinocularsIcon,
   BroadcastIcon,
   CloudArrowUpIcon,
   DownloadSimpleIcon,
@@ -69,6 +70,10 @@ const navGroups: NavGroup[] = [
       { href: "/status", label: "公开看板", icon: BroadcastIcon },
       { href: "/status-admin", label: "看板设置", icon: GearIcon },
     ],
+  },
+  {
+    label: "安全",
+    items: [{ href: "/hunter", label: "泄露巡检", icon: BinocularsIcon }],
   },
   {
     label: "系统",

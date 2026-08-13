@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"os"
 	"path/filepath"
@@ -34,6 +36,7 @@ var KnownEvents = []string{
 	"register.failed",
 	"pool.low",
 	"patrol.failed",
+	"hunter.notice",
 	"system.test",
 }
 
@@ -416,14 +419,26 @@ func sendSMTP(cfg map[string]string, title, body string) error {
 	if host == "" || from == "" || toRaw == "" {
 		return fmt.Errorf("smtp incomplete")
 	}
+	if strings.ContainsAny(title, "\r\n") || strings.ContainsAny(from, "\r\n") || strings.ContainsAny(toRaw, "\r\n") {
+		return fmt.Errorf("smtp headers must not contain newlines")
+	}
 	recipients := splitCSV(toRaw)
 	if len(recipients) == 0 {
 		return fmt.Errorf("no recipients")
 	}
+	if _, err := mail.ParseAddress(from); err != nil {
+		return fmt.Errorf("invalid from address")
+	}
+	for _, recipient := range recipients {
+		parsed, err := mail.ParseAddress(recipient)
+		if err != nil || parsed.Address != recipient {
+			return fmt.Errorf("invalid recipient address")
+		}
+	}
 	addr := net.JoinHostPort(host, port)
 	msg := []byte("From: " + from + "\r\n" +
 		"To: " + strings.Join(recipients, ", ") + "\r\n" +
-		"Subject: " + title + "\r\n" +
+		"Subject: " + mime.QEncoding.Encode("UTF-8", title) + "\r\n" +
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: text/plain; charset=UTF-8\r\n" +
 		"\r\n" + body + "\r\n")

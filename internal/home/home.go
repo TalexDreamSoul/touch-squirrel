@@ -42,6 +42,7 @@ type Paths struct {
 	MarketCache  string // market download cache
 	AccountsDB   string // unified account pool sqlite
 	NotifyFile   string // notification channels json
+	HunterFile   string // authorized asset discovery / disclosure workflow
 }
 
 // Resolve picks the data root with this precedence:
@@ -97,6 +98,7 @@ func Resolve() (Paths, error) {
 		MarketCache:  filepath.Join(root, "market-cache"),
 		AccountsDB:   filepath.Join(root, "accounts.db"),
 		NotifyFile:   filepath.Join(root, "notifications.json"),
+		HunterFile:   filepath.Join(root, "hunter.json"),
 	}
 	return p, nil
 }
