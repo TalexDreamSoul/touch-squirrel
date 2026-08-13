@@ -175,7 +175,12 @@ export function AdminShell({ children }: { children: ReactNode }) {
         </Sidebar.Footer>
       </Sidebar>
 
-      <main className="min-h-screen flex-1 overflow-auto p-6">{children}</main>
+      <main className="min-h-screen flex-1 overflow-auto p-6">
+        <div className="mb-3 md:hidden">
+          <Sidebar.Trigger title="打开导航" />
+        </div>
+        {children}
+      </main>
     </Sidebar.Provider>
   );
 }
