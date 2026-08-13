@@ -215,6 +215,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/runs/{id}/file", s.handleFile)
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	s.mux.HandleFunc("PUT /api/config", s.handlePutConfig)
+	s.mux.HandleFunc("POST /api/infrastructure/import", s.handleInfrastructureImport)
 
 	// transfer: batch upload
 	s.mux.HandleFunc("POST /api/transfer/prepare", s.handleTransferPrepare)
@@ -252,6 +253,7 @@ func (s *Server) routes() {
 	// cluster / federation (master–slave)
 	// Public federation endpoints: auth via CLUSTER_PUBLIC_TOKEN (optional), not PANEL_TOKEN.
 	s.mux.HandleFunc("GET /api/federation/info", s.handleFederationInfo)
+	s.mux.HandleFunc("GET /api/federation/infrastructure", s.handleFederationInfrastructure)
 	s.mux.HandleFunc("POST /api/federation/heartbeat", s.handleFederationHeartbeat)
 	s.mux.HandleFunc("POST /api/federation/report", s.handleFederationReport)
 	s.mux.HandleFunc("GET /api/federation/pool", s.handleFederationPoolList)
@@ -960,6 +962,12 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"http_proxy":                   cfg.HTTPProxy,
 		"https_proxy":                  cfg.HTTPSProxy,
 		"no_proxy":                     cfg.NoProxy,
+		"resin_proxy":                  cfg.ResinProxy,
+		"resin_token_set":              strings.TrimSpace(cfg.ResinToken) != "",
+		"resin_platform":               cfg.ResinPlatform,
+		"mail_router_url":              cfg.MailRouterURL,
+		"mail_router_api_key_set":      strings.TrimSpace(cfg.MailRouterAPIKey) != "",
+		"mail_router_domain":           cfg.MailRouterDomain,
 		"probe_enabled":                cfg.ProbeEnabled,
 		"physical_cap":                 cfg.PhysicalCap,
 		"cpa_upload_enabled":           cfg.CPAUploadEnabled,
@@ -1000,6 +1008,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"cluster_auto_upload":          cfg.ClusterAutoUpload,
 		"cluster_share_pool_list":      cfg.ClusterSharePoolList,
 		"cluster_share_pool_pull":      cfg.ClusterSharePoolPull,
+		"cluster_share_infrastructure": cfg.ClusterShareInfrastructure,
 		"local_pool_auto_import":       cfg.LocalPoolAutoImport,
 		"local_pool_auto_sync":         cfg.LocalPoolAutoSync,
 	}
@@ -1023,6 +1032,12 @@ type configUpdate struct {
 	CPAManagementKey  *string `json:"cpa_management_key"`
 	HTTPProxy         *string `json:"http_proxy"`
 	HTTPSProxy        *string `json:"https_proxy"`
+	ResinProxy        *string `json:"resin_proxy"`
+	ResinToken        *string `json:"resin_token"`
+	ResinPlatform     *string `json:"resin_platform"`
+	MailRouterURL     *string `json:"mail_router_url"`
+	MailRouterAPIKey  *string `json:"mail_router_api_key"`
+	MailRouterDomain  *string `json:"mail_router_domain"`
 
 	UploadConcurrency *int `json:"upload_concurrency"`
 	UploadBatchSize   *int `json:"upload_batch_size"`
@@ -1046,20 +1061,21 @@ type configUpdate struct {
 	CleanupBackup       *bool `json:"cleanup_backup"`
 	CleanupDryRun       *bool `json:"cleanup_dry_run"`
 
-	ClusterRole           *string `json:"cluster_role"`
-	ClusterNodeName       *string `json:"cluster_node_name"`
-	ClusterPublicToken    *string `json:"cluster_public_token"`
-	ClusterMasterURL      *string `json:"cluster_master_url"`
-	ClusterMasterURLs     *string `json:"cluster_master_urls"`
-	ClusterStatusPassword *string `json:"cluster_status_password"`
-	ClusterHeartbeatSec   *int    `json:"cluster_heartbeat_sec"`
-	ClusterPoolTarget     *int    `json:"cluster_pool_target"`
-	ClusterAssignMin      *int    `json:"cluster_assign_min"`
-	ClusterAssignMax      *int    `json:"cluster_assign_max"`
-	ClusterAutoRegister   *bool   `json:"cluster_auto_register"`
-	ClusterAutoUpload     *bool   `json:"cluster_auto_upload"`
-	ClusterSharePoolList  *bool   `json:"cluster_share_pool_list"`
-	ClusterSharePoolPull  *bool   `json:"cluster_share_pool_pull"`
+	ClusterRole                *string `json:"cluster_role"`
+	ClusterNodeName            *string `json:"cluster_node_name"`
+	ClusterPublicToken         *string `json:"cluster_public_token"`
+	ClusterMasterURL           *string `json:"cluster_master_url"`
+	ClusterMasterURLs          *string `json:"cluster_master_urls"`
+	ClusterStatusPassword      *string `json:"cluster_status_password"`
+	ClusterHeartbeatSec        *int    `json:"cluster_heartbeat_sec"`
+	ClusterPoolTarget          *int    `json:"cluster_pool_target"`
+	ClusterAssignMin           *int    `json:"cluster_assign_min"`
+	ClusterAssignMax           *int    `json:"cluster_assign_max"`
+	ClusterAutoRegister        *bool   `json:"cluster_auto_register"`
+	ClusterAutoUpload          *bool   `json:"cluster_auto_upload"`
+	ClusterSharePoolList       *bool   `json:"cluster_share_pool_list"`
+	ClusterSharePoolPull       *bool   `json:"cluster_share_pool_pull"`
+	ClusterShareInfrastructure *bool   `json:"cluster_share_infrastructure"`
 
 	LocalPoolAutoImport *bool `json:"local_pool_auto_import"`
 	LocalPoolAutoSync   *bool `json:"local_pool_auto_sync"`
@@ -1075,6 +1091,30 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&u); err != nil {
 		writeJSON(w, 400, map[string]any{"ok": false, "error": "invalid json"})
 		return
+	}
+	if u.ResinProxy != nil {
+		if err := validateProxyURL("resin_proxy", *u.ResinProxy); err != nil {
+			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+	}
+	if u.MailRouterURL != nil {
+		if err := validateHTTPURL("mail_router_url", *u.MailRouterURL); err != nil {
+			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+	}
+	if u.ResinToken != nil {
+		if err := validateSecretInput("resin_token", *u.ResinToken); err != nil {
+			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+	}
+	if u.MailRouterAPIKey != nil {
+		if err := validateSecretInput("mail_router_api_key", *u.MailRouterAPIKey); err != nil {
+			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
 	}
 	if u.EmailMode != nil {
 		cfg.EmailMode = config.EmailMode(strings.ToLower(*u.EmailMode))
@@ -1130,6 +1170,24 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if u.HTTPSProxy != nil {
 		cfg.HTTPSProxy = *u.HTTPSProxy
+	}
+	if u.ResinProxy != nil {
+		cfg.ResinProxy = strings.TrimSpace(*u.ResinProxy)
+	}
+	if u.ResinToken != nil && strings.TrimSpace(*u.ResinToken) != "" {
+		cfg.ResinToken = strings.TrimSpace(*u.ResinToken)
+	}
+	if u.ResinPlatform != nil {
+		cfg.ResinPlatform = strings.TrimSpace(*u.ResinPlatform)
+	}
+	if u.MailRouterURL != nil {
+		cfg.MailRouterURL = strings.TrimRight(strings.TrimSpace(*u.MailRouterURL), "/")
+	}
+	if u.MailRouterAPIKey != nil && strings.TrimSpace(*u.MailRouterAPIKey) != "" {
+		cfg.MailRouterAPIKey = strings.TrimSpace(*u.MailRouterAPIKey)
+	}
+	if u.MailRouterDomain != nil {
+		cfg.MailRouterDomain = strings.TrimSpace(*u.MailRouterDomain)
 	}
 	if u.UploadConcurrency != nil {
 		cfg.UploadConcurrency = *u.UploadConcurrency
@@ -1244,6 +1302,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if u.ClusterSharePoolPull != nil {
 		cfg.ClusterSharePoolPull = *u.ClusterSharePoolPull
 	}
+	if u.ClusterShareInfrastructure != nil {
+		cfg.ClusterShareInfrastructure = *u.ClusterShareInfrastructure
+	}
 	if u.ClusterStatusPassword != nil {
 		cfg.ClusterStatusPassword = *u.ClusterStatusPassword
 	}
@@ -1253,22 +1314,44 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if u.LocalPoolAutoSync != nil {
 		cfg.LocalPoolAutoSync = *u.LocalPoolAutoSync
 	}
-	if err := config.Save(s.opt.Paths.Config, cfg); err != nil {
+	if err := saveConfigWithSecrets(s.opt.Paths.Config, cfg); err != nil {
 		writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	// Secrets intentionally omitted by config.Save — re-append from merged cfg every time.
-	if strings.TrimSpace(cfg.CPAManagementKey) != "" {
-		_ = appendEnvKey(s.opt.Paths.Config, "CPA_MANAGEMENT_KEY", cfg.CPAManagementKey)
-	}
-	if strings.TrimSpace(cfg.ClusterPublicToken) != "" {
-		_ = appendEnvKey(s.opt.Paths.Config, "CLUSTER_PUBLIC_TOKEN", cfg.ClusterPublicToken)
-	}
-	// status password may be intentionally empty (open board); only rewrite when set in memory
-	if u.ClusterStatusPassword != nil || strings.TrimSpace(cfg.ClusterStatusPassword) != "" {
-		_ = appendEnvKey(s.opt.Paths.Config, "CLUSTER_STATUS_PASSWORD", cfg.ClusterStatusPassword)
-	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func saveConfigWithSecrets(path string, cfg config.Config) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	defer os.Remove(tmpPath)
+
+	if err := config.Save(tmpPath, cfg); err != nil {
+		return err
+	}
+	for _, secret := range []struct {
+		key string
+		val string
+	}{
+		{"CPA_MANAGEMENT_KEY", cfg.CPAManagementKey},
+		{"CLUSTER_PUBLIC_TOKEN", cfg.ClusterPublicToken},
+		{"CLUSTER_STATUS_PASSWORD", cfg.ClusterStatusPassword},
+		{"RESIN_TOKEN", cfg.ResinToken},
+		{"MAIL_ROUTER_API_KEY", cfg.MailRouterAPIKey},
+	} {
+		if strings.TrimSpace(secret.val) == "" {
+			continue
+		}
+		if err := appendEnvKey(tmpPath, secret.key, secret.val); err != nil {
+			return err
+		}
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func appendEnvKey(path, key, val string) error {

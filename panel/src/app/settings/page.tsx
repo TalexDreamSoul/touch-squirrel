@@ -7,10 +7,30 @@ import { PageHeader } from "@/components/page-header";
 import { api, type PanelConfig } from "@/lib/api";
 import { useTheme, type ThemeMode } from "@/lib/theme";
 
+function encodeInfrastructure(value: Record<string, string | number>) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeInfrastructure(raw: string) {
+  const base64 = raw.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, string | number>;
+}
+
 export default function SettingsPage() {
   const { theme, setTheme, resolved } = useTheme();
   const [cfg, setCfg] = useState<PanelConfig>({});
   const [cpaKey, setCpaKey] = useState("");
+  const [resinToken, setResinToken] = useState("");
+  const [mailRouterAPIKey, setMailRouterAPIKey] = useState("");
+  const [importLink, setImportLink] = useState("");
+  const [masterURL, setMasterURL] = useState("");
+  const [masterToken, setMasterToken] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -39,6 +59,10 @@ export default function SettingsPage() {
         register_proxy: String(cfg.register_proxy || ""),
         flaresolverr_url: String(cfg.flaresolverr_url || ""),
         email_mode: String(cfg.email_mode || "tempmail"),
+        resin_proxy: String(cfg.resin_proxy || ""),
+        resin_platform: String(cfg.resin_platform || "Default"),
+        mail_router_url: String(cfg.mail_router_url || ""),
+        mail_router_domain: String(cfg.mail_router_domain || ""),
         patrol_enabled: !!cfg.patrol_enabled,
         patrol_interval_min: Number(cfg.patrol_interval_min || 30),
         refill_enabled: !!cfg.refill_enabled,
@@ -50,8 +74,12 @@ export default function SettingsPage() {
         cleanup_dry_run: !!cfg.cleanup_dry_run,
       };
       if (cpaKey.trim()) body.cpa_management_key = cpaKey.trim();
+      if (resinToken.trim()) body.resin_token = resinToken.trim();
+      if (mailRouterAPIKey.trim()) body.mail_router_api_key = mailRouterAPIKey.trim();
       await api("/api/config", { method: "PUT", body: JSON.stringify(body) });
       setCpaKey("");
+      setResinToken("");
+      setMailRouterAPIKey("");
       setMsg("已保存");
       await load();
     } catch (e) {
@@ -61,6 +89,59 @@ export default function SettingsPage() {
     }
   }
 
+  async function importInfrastructure(source: "link" | "federation") {
+    setBusy(true);
+    setMsg("");
+    try {
+      if (source === "link") {
+        const parsed = new URL(importLink.trim());
+        const raw = parsed.searchParams.get("infra");
+        if (!raw) throw new Error("导入链接缺少 infra 参数");
+        const imported = decodeInfrastructure(raw);
+        await api("/api/infrastructure/import", {
+          method: "POST",
+          body: JSON.stringify({ source: "link", import: imported }),
+        });
+      } else {
+        await api("/api/infrastructure/import", {
+          method: "POST",
+          body: JSON.stringify({
+            source: "federation",
+            master_url: masterURL.trim(),
+            cluster_token: masterToken.trim(),
+          }),
+        });
+      }
+      setImportLink("");
+      setMasterToken("");
+      setMsg("基础设施配置已导入");
+      await load();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "导入失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function createImportLink() {
+    const payload = {
+      version: 1,
+      resin_proxy: String(cfg.resin_proxy || ""),
+      resin_platform: String(cfg.resin_platform || "Default"),
+      mail_router_url: String(cfg.mail_router_url || ""),
+      mail_router_domain: String(cfg.mail_router_domain || ""),
+    };
+    const encoded = encodeInfrastructure(payload);
+    const link = `${window.location.origin}/settings/?infra=${encoded}`;
+    setImportLink(link);
+    void navigator.clipboard?.writeText(link);
+    setMsg("已生成并复制无密钥导入链接");
+  }
+
+  useEffect(() => {
+    const raw = new URLSearchParams(window.location.search).get("infra");
+    if (raw) setImportLink(`${window.location.origin}/settings/?infra=${raw}`);
+  }, []);
   async function testConn() {
     setBusy(true);
     try {
@@ -198,6 +279,114 @@ export default function SettingsPage() {
                 value={String(cfg.email_mode || "tempmail")}
                 onChange={(e) => setField("email_mode", e.target.value)}
               />
+            </div>
+          </LayerCard.Primary>
+        </LayerCard>
+
+        <LayerCard>
+          <LayerCard.Secondary>Resin 粘性代理</LayerCard.Secondary>
+          <LayerCard.Primary>
+            <div className="flex flex-col gap-3">
+              <Input
+                label="Resin Proxy URL"
+                value={String(cfg.resin_proxy || "")}
+                onChange={(e) => setField("resin_proxy", e.target.value)}
+                placeholder="http://127.0.0.1:2260"
+              />
+              <Input
+                label="Resin Token"
+                type="password"
+                value={resinToken}
+                onChange={(e) => setResinToken(e.target.value)}
+                placeholder={cfg.resin_token_set ? "已设置 · 留空不改" : "RESIN_PROXY_TOKEN"}
+              />
+              <Input
+                label="Platform"
+                value={String(cfg.resin_platform || "Default")}
+                onChange={(e) => setField("resin_platform", e.target.value)}
+                placeholder="Default"
+              />
+            </div>
+          </LayerCard.Primary>
+        </LayerCard>
+
+        <LayerCard>
+          <LayerCard.Secondary>Touch Mail Router</LayerCard.Secondary>
+          <LayerCard.Primary>
+            <div className="flex flex-col gap-3">
+              <Input
+                label="API URL"
+                value={String(cfg.mail_router_url || "")}
+                onChange={(e) => setField("mail_router_url", e.target.value)}
+                placeholder="https://mail.example.com"
+              />
+              <Input
+                label="API Key"
+                type="password"
+                value={mailRouterAPIKey}
+                onChange={(e) => setMailRouterAPIKey(e.target.value)}
+                placeholder={cfg.mail_router_api_key_set ? "已设置 · 留空不改" : "DuckMail API Key"}
+              />
+              <Input
+                label="邮箱域名"
+                value={String(cfg.mail_router_domain || "")}
+                onChange={(e) => setField("mail_router_domain", e.target.value)}
+                placeholder="inbound.example.com"
+              />
+            </div>
+          </LayerCard.Primary>
+        </LayerCard>
+
+        <LayerCard>
+          <LayerCard.Secondary>快速导入</LayerCard.Secondary>
+          <LayerCard.Primary>
+            <div className="flex flex-col gap-3 sm:max-w-xl">
+              <Input
+                label="无密钥导入链接"
+                value={importLink}
+                onChange={(e) => setImportLink(e.target.value)}
+                placeholder="粘贴由另一台面板生成的链接"
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="secondary" disabled={busy} onClick={createImportLink}>
+                  生成链接
+                </Button>
+                <Button size="sm" loading={busy} disabled={!importLink.trim()} onClick={() => void importInfrastructure("link")}>
+                  导入链接
+                </Button>
+              </div>
+              <Text size="xs" variant="secondary">
+                链接仅包含地址、域名和 Resin Platform，不包含任何 Token 或 API Key。
+              </Text>
+            </div>
+          </LayerCard.Primary>
+        </LayerCard>
+
+        <LayerCard>
+          <LayerCard.Secondary>从联邦主节点拉取</LayerCard.Secondary>
+          <LayerCard.Primary>
+            <div className="flex flex-col gap-3 sm:max-w-xl">
+              <Input
+                label="主节点 URL（留空使用主从配置首项）"
+                value={masterURL}
+                onChange={(e) => setMasterURL(e.target.value)}
+                placeholder="https://master.example.com"
+              />
+              <Input
+                label="联邦密钥（留空复用主从配置）"
+                type="password"
+                value={masterToken}
+                onChange={(e) => setMasterToken(e.target.value)}
+                placeholder="X-Cluster-Token"
+              />
+              <div>
+                <Button size="sm" loading={busy} onClick={() => void importInfrastructure("federation")}>
+                  拉取并导入
+                </Button>
+              </div>
+              <Text size="xs" variant="secondary">
+                主节点必须启用“共享基础设施配置”；凭据只经已鉴权联邦请求传输，不写入导入链接。
+              </Text>
             </div>
           </LayerCard.Primary>
         </LayerCard>

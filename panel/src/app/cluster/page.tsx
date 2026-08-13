@@ -117,6 +117,7 @@ export default function ClusterPage() {
   const [autoUpload, setAutoUpload] = useState(true);
   const [sharePoolList, setSharePoolList] = useState(false);
   const [sharePoolPull, setSharePoolPull] = useState(false);
+  const [shareInfrastructure, setShareInfrastructure] = useState(false);
 
   const [saved, setSaved] = useState({
     role: "",
@@ -130,6 +131,7 @@ export default function ClusterPage() {
     autoUpload: true,
     sharePoolList: false,
     sharePoolPull: false,
+    shareInfrastructure: false,
   });
 
   const [msg, setMsg] = useState("");
@@ -150,7 +152,8 @@ export default function ClusterPage() {
     autoRegister !== saved.autoRegister ||
     autoUpload !== saved.autoUpload ||
     sharePoolList !== saved.sharePoolList ||
-    sharePoolPull !== saved.sharePoolPull;
+    sharePoolPull !== saved.sharePoolPull ||
+    shareInfrastructure !== saved.shareInfrastructure;
   const anyDirty = dirtyRole || dirtyMasters || dirtyPolicy;
 
   async function load() {
@@ -190,6 +193,7 @@ export default function ClusterPage() {
     const nextAU = c.cluster_auto_upload !== false;
     const nextSL = c.cluster_share_pool_list === true;
     const nextSP = c.cluster_share_pool_pull === true;
+    const nextSI = c.cluster_share_infrastructure === true;
 
     setRole(nextRole);
     setNodeName(nextName);
@@ -202,6 +206,7 @@ export default function ClusterPage() {
     setAutoUpload(nextAU);
     setSharePoolList(nextSL);
     setSharePoolPull(nextSP);
+    setShareInfrastructure(nextSI);
     setPublicToken("");
     setStatusPassword("");
     setEditIdx(null);
@@ -219,6 +224,7 @@ export default function ClusterPage() {
       autoUpload: nextAU,
       sharePoolList: nextSL,
       sharePoolPull: nextSP,
+      shareInfrastructure: nextSI,
     });
   }
 
@@ -280,6 +286,7 @@ export default function ClusterPage() {
       cluster_auto_upload: autoUpload,
       cluster_share_pool_list: sharePoolList,
       cluster_share_pool_pull: sharePoolPull,
+      cluster_share_infrastructure: shareInfrastructure,
     });
   }
 
@@ -299,6 +306,7 @@ export default function ClusterPage() {
         cluster_auto_upload: autoUpload,
         cluster_share_pool_list: sharePoolList,
         cluster_share_pool_pull: sharePoolPull,
+        cluster_share_infrastructure: shareInfrastructure,
       };
       if (masters[0]) body.cluster_master_url = masters[0].url.replace(/\/$/, "");
       else body.cluster_master_url = "";
@@ -735,6 +743,14 @@ export default function ClusterPage() {
                       if (on) setSharePoolList(true);
                     }}
                   />
+                  <Switch
+                    label="允许联邦拉取 Resin / 邮箱路由配置"
+                    checked={shareInfrastructure}
+                    onCheckedChange={(v) => setShareInfrastructure(!!v)}
+                  />
+                  <Text size="xs" variant="secondary">
+                    开启后，持有联邦密钥的从节点可读取 Resin Token 和 MailRouter API Key。
+                  </Text>
                 </>
               ) : (
                 <>

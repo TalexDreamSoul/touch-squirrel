@@ -47,6 +47,16 @@ type Config struct {
 	HTTPSProxy string
 	NoProxy    string
 
+	// External infrastructure. Endpoint metadata is persisted normally; access
+	// tokens are appended separately so Config.Save never writes them by accident.
+	ResinProxy    string
+	ResinToken    string
+	ResinPlatform string
+
+	MailRouterURL    string
+	MailRouterAPIKey string
+	MailRouterDomain string
+
 	// CPA Management upload
 	CPAUploadEnabled      bool
 	CPAManagementBase     string
@@ -100,8 +110,9 @@ type Config struct {
 	// Public status page (human-facing), independent from ClusterPublicToken
 	ClusterStatusPassword string // empty = open; set to require password on /status
 	// Federation pool share (master-side ACL for slaves/peers)
-	ClusterSharePoolList bool // allow list formal CPA pool over federation token
-	ClusterSharePoolPull bool // allow download credentials over federation token
+	ClusterSharePoolList       bool // allow list formal CPA pool over federation token
+	ClusterSharePoolPull       bool // allow download credentials over federation token
+	ClusterShareInfrastructure bool // share Resin + TouchMailRouter config with authenticated peers
 
 	// Local pool (register results)
 	LocalPoolAutoImport bool // after register, copy CPA json into GROK_HOME/local-pool
@@ -131,6 +142,7 @@ func Defaults() Config {
 		HTTPProxy:             "http://127.0.0.1:40080",
 		HTTPSProxy:            "http://127.0.0.1:40080",
 		NoProxy:               "127.0.0.1,localhost",
+		ResinPlatform:         "Default",
 		CPAUploadEnabled:      false,
 		CPAManagementBase:     "http://localhost:8317/v0/management",
 		CPAUploadTimeoutSec:   30,
@@ -210,6 +222,12 @@ func Save(path string, cfg Config) error {
 	b.WriteString(fmt.Sprintf("HTTPS_PROXY=%s\n", cfg.HTTPSProxy))
 	b.WriteString(fmt.Sprintf("HTTP_PROXY=%s\n", cfg.HTTPProxy))
 	b.WriteString(fmt.Sprintf("NO_PROXY=%s\n", cfg.NoProxy))
+	b.WriteString(fmt.Sprintf("RESIN_PROXY=%s\n", cfg.ResinProxy))
+	b.WriteString(fmt.Sprintf("RESIN_PLATFORM=%s\n", cfg.ResinPlatform))
+	// RESIN_TOKEN: written via appendEnvKey when explicitly set from panel.
+	b.WriteString(fmt.Sprintf("MAIL_ROUTER_URL=%s\n", cfg.MailRouterURL))
+	b.WriteString(fmt.Sprintf("MAIL_ROUTER_DOMAIN=%s\n", cfg.MailRouterDomain))
+	// MAIL_ROUTER_API_KEY: written via appendEnvKey when explicitly set from panel.
 	b.WriteString(fmt.Sprintf("PROBE_ENABLED=%s\n", bool01(cfg.ProbeEnabled)))
 	b.WriteString(fmt.Sprintf("PHYSICAL_CAP=%d\n", cfg.PhysicalCap))
 	b.WriteString(fmt.Sprintf("CPA_UPLOAD_ENABLED=%s\n", bool01(cfg.CPAUploadEnabled)))
@@ -250,6 +268,7 @@ func Save(path string, cfg Config) error {
 	b.WriteString(fmt.Sprintf("CLUSTER_AUTO_UPLOAD=%s\n", bool01(cfg.ClusterAutoUpload)))
 	b.WriteString(fmt.Sprintf("CLUSTER_SHARE_POOL_LIST=%s\n", bool01(cfg.ClusterSharePoolList)))
 	b.WriteString(fmt.Sprintf("CLUSTER_SHARE_POOL_PULL=%s\n", bool01(cfg.ClusterSharePoolPull)))
+	b.WriteString(fmt.Sprintf("CLUSTER_SHARE_INFRASTRUCTURE=%s\n", bool01(cfg.ClusterShareInfrastructure)))
 	b.WriteString(fmt.Sprintf("LOCAL_POOL_AUTO_IMPORT=%s\n", bool01(cfg.LocalPoolAutoImport)))
 	b.WriteString(fmt.Sprintf("LOCAL_POOL_AUTO_SYNC=%s\n", bool01(cfg.LocalPoolAutoSync)))
 	// CLUSTER_STATUS_PASSWORD via appendEnvKey when set from panel
@@ -374,6 +393,24 @@ func applyMap(cfg *Config, env map[string]string) {
 	}
 	if v, ok := env["NO_PROXY"]; ok {
 		cfg.NoProxy = v
+	}
+	if v, ok := env["RESIN_PROXY"]; ok {
+		cfg.ResinProxy = v
+	}
+	if v, ok := env["RESIN_TOKEN"]; ok {
+		cfg.ResinToken = v
+	}
+	if v, ok := env["RESIN_PLATFORM"]; ok {
+		cfg.ResinPlatform = v
+	}
+	if v, ok := env["MAIL_ROUTER_URL"]; ok {
+		cfg.MailRouterURL = v
+	}
+	if v, ok := env["MAIL_ROUTER_API_KEY"]; ok {
+		cfg.MailRouterAPIKey = v
+	}
+	if v, ok := env["MAIL_ROUTER_DOMAIN"]; ok {
+		cfg.MailRouterDomain = v
 	}
 	if v, ok := env["PROBE_ENABLED"]; ok {
 		cfg.ProbeEnabled = truthy(v)
@@ -537,6 +574,9 @@ func applyMap(cfg *Config, env map[string]string) {
 	if v, ok := env["CLUSTER_SHARE_POOL_PULL"]; ok {
 		cfg.ClusterSharePoolPull = truthy(v)
 	}
+	if v, ok := env["CLUSTER_SHARE_INFRASTRUCTURE"]; ok {
+		cfg.ClusterShareInfrastructure = truthy(v)
+	}
 	if v, ok := env["LOCAL_POOL_AUTO_IMPORT"]; ok {
 		cfg.LocalPoolAutoImport = truthy(v)
 	}
@@ -585,6 +625,7 @@ type MasterEndpoint struct {
 //   - plain URLs separated by comma/newline/space
 //   - JSON array: [{"url":"https://m","token":"secret"}]
 //   - lines "url|token"
+//
 // Falls back to CLUSTER_MASTER_URL; empty token falls back to ClusterPublicToken at call site.
 func (cfg Config) ClusterMasterEndpoints() []MasterEndpoint {
 	raw := strings.TrimSpace(cfg.ClusterMasterURLs)
