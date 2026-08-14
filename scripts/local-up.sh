@@ -68,7 +68,7 @@ ensure_binary() {
     exit 1
   fi
   echo "[*] using $go_bin"
-  "$go_bin" build -ldflags "-s -w -X main.version=0.2.0-panel" -o "$ROOT/bin/squirrel" ./cmd/grok
+  make GO="$go_bin" build
 }
 
 seed_host_config() {

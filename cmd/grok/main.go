@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -27,7 +28,44 @@ import (
 	"github.com/grok-free-register/grok-reg/web"
 )
 
-var version = "0.1.0"
+var (
+	version    = "0.1.0"
+	commit     = ""
+	commitTime = ""
+	repository = "https://github.com/TalexDreamSoul/touch-xai-register"
+)
+
+func currentBuildInfo() api.BuildInfo {
+	info := api.BuildInfo{
+		Version:    strings.TrimSpace(version),
+		Repository: strings.TrimSuffix(strings.TrimSpace(repository), "/"),
+		Commit:     strings.TrimSpace(commit),
+		CommitTime: strings.TrimSpace(commitTime),
+	}
+	if raw, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range raw.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				if info.Commit == "" {
+					info.Commit = setting.Value
+				}
+			case "vcs.time":
+				if info.CommitTime == "" {
+					info.CommitTime = setting.Value
+				}
+			case "vcs.modified":
+				info.Dirty = setting.Value == "true"
+			}
+		}
+	}
+	if info.Version == "" {
+		info.Version = "dev"
+	}
+	if info.Commit == "" {
+		info.Commit = "unknown"
+	}
+	return info
+}
 
 func main() {
 	args := os.Args[1:]
@@ -214,6 +252,7 @@ func cmdPanel(args []string) error {
 		Addr:  addr,
 		Token: token,
 		WebFS: web.FS,
+		Build: currentBuildInfo(),
 	})
 	return srv.ListenAndServe()
 }

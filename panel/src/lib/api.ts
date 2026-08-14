@@ -64,6 +64,13 @@ export type Health = {
   service: string;
   auth: boolean;
   time: string;
+  build?: {
+    version: string;
+    repository: string;
+    commit: string;
+    commit_time?: string;
+    dirty: boolean;
+  };
 };
 
 export type RunStatus = {

@@ -38,12 +38,22 @@ import (
 	"github.com/grok-free-register/grok-reg/internal/transfer"
 )
 
+// BuildInfo identifies the source revision used for the running binary.
+type BuildInfo struct {
+	Version    string `json:"version"`
+	Repository string `json:"repository"`
+	Commit     string `json:"commit"`
+	CommitTime string `json:"commit_time,omitempty"`
+	Dirty      bool   `json:"dirty"`
+}
+
 // Options configures the panel HTTP server.
 type Options struct {
 	Paths home.Paths
-	Addr  string // e.g. :8787
-	Token string // empty = no auth (dev only)
-	WebFS fs.FS  // static panel assets (index.html at root)
+	Addr  string    // e.g. :8787
+	Token string    // empty = no auth (dev only)
+	WebFS fs.FS     // static panel assets (index.html at root)
+	Build BuildInfo // immutable metadata for this binary
 }
 
 type Server struct {
@@ -474,6 +484,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"service": "touch-squirrel-panel",
 		"time":    time.Now().UTC().Format(time.RFC3339),
 		"auth":    s.opt.Token != "",
+		"build":   s.opt.Build,
 		"jobs": map[string]any{
 			"upload": map[string]int{"total": upTotal, "running": upRunning},
 			"export": map[string]int{"total": exTotal, "running": exRunning},

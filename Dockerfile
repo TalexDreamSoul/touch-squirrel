@@ -1,12 +1,16 @@
 # ── build grok binary ──────────────────────────────────────────
 # Prefer mirror if Docker Hub is slow: docker.m.daocloud.io/library/golang:1.24-bookworm
 FROM golang:1.24-bookworm AS build
+ARG SQUIRREL_VERSION=0.2.0-panel
+ARG SQUIRREL_COMMIT=unknown
+ARG SQUIRREL_COMMIT_TIME
+ARG SQUIRREL_REPOSITORY=https://github.com/TalexDreamSoul/touch-xai-register
 ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=0.2.0-panel" -o /out/squirrel ./cmd/grok
+RUN CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${SQUIRREL_VERSION} -X main.commit=${SQUIRREL_COMMIT} -X main.commitTime=${SQUIRREL_COMMIT_TIME} -X main.repository=${SQUIRREL_REPOSITORY}" -o /out/squirrel ./cmd/grok
 
 # ── runtime: panel + worker + turnstile browser ────────────────
 # Mirror: docker.m.daocloud.io/library/python:3.12-bookworm

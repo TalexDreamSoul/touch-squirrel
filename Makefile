@@ -1,6 +1,9 @@
 APP=squirrel
 MODULE=github.com/grok-free-register/grok-reg
 VERSION?=0.2.0-panel
+COMMIT?=$(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+COMMIT_TIME?=$(shell git show -s --format=%cI HEAD 2>/dev/null || true)
+REPOSITORY?=https://github.com/TalexDreamSoul/touch-xai-register
 PREFIX?=/usr/local
 BINDIR=$(PREFIX)/bin
 
@@ -53,7 +56,7 @@ build:
 		exit 1; \
 	fi
 	@echo "[*] using $(GO)"
-	$(GO) build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/$(APP) ./cmd/grok
+	$(GO) build -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.commitTime=$(COMMIT_TIME) -X main.repository=$(REPOSITORY)" -o bin/$(APP) ./cmd/grok
 	@echo "[✓] bin/$(APP)"
 
 # Next.js + Cloudflare Kumo → web/out (embedded by Go)
@@ -92,11 +95,11 @@ status:
 
 docker-up:
 	@test -f .env || (cp .env.example .env && echo "[*] created .env from example — 请修改 PANEL_TOKEN")
-	COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME:-grok-register} docker compose up -d --build
+	SQUIRREL_VERSION="$(VERSION)" SQUIRREL_COMMIT="$(COMMIT)" SQUIRREL_COMMIT_TIME="$(COMMIT_TIME)" SQUIRREL_REPOSITORY="$(REPOSITORY)" COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME:-grok-register} docker compose up -d --build
 
 docker-rebuild:
 	@test -f .env || (cp .env.example .env && echo "[*] created .env from example — 请修改 PANEL_TOKEN")
-	COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME:-grok-register} docker compose up -d --build --force-recreate panel
+	SQUIRREL_VERSION="$(VERSION)" SQUIRREL_COMMIT="$(COMMIT)" SQUIRREL_COMMIT_TIME="$(COMMIT_TIME)" SQUIRREL_REPOSITORY="$(REPOSITORY)" COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME:-grok-register} docker compose up -d --build --force-recreate panel
 
 docker-down:
 	COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME:-grok-register} docker compose down

@@ -21,6 +21,7 @@ import { PageHeader } from "@/components/page-header";
 import { resetOnboarding } from "@/components/onboarding";
 import {
   api,
+  type Health,
   type PanelConfig,
   type PluginRepository,
 } from "@/lib/api";
@@ -86,6 +87,7 @@ export default function SettingsPage() {
   const [repositoryBusy, setRepositoryBusy] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [buildInfo, setBuildInfo] = useState<NonNullable<Health["build"]> | null>(null);
 
   const secrets = [
     cpaKey,
@@ -104,6 +106,17 @@ export default function SettingsPage() {
     secrets.some((s) => s.trim() !== "") ||
     (savedSnap !== "" && snapshotOf(cfg) !== savedSnap);
   const emailMode = String(cfg.email_mode || "tempmail");
+  const buildRepository = (buildInfo?.repository || "").replace(/\/$/, "");
+  const buildCommit = buildInfo?.commit || "";
+  const buildCommitURL =
+    buildRepository && buildCommit && buildCommit !== "unknown"
+      ? `${buildRepository}/commit/${encodeURIComponent(buildCommit)}`
+      : "";
+  const buildCommitLabel =
+    buildCommit && buildCommit !== "unknown" ? buildCommit.slice(0, 12) : "未注入";
+  const buildCommitTime = buildInfo?.commit_time
+    ? new Date(buildInfo.commit_time).toLocaleString("zh-CN", { hour12: false })
+    : "";
 
   async function load() {
     const d = await api<{ config: PanelConfig }>("/api/config");
@@ -119,8 +132,13 @@ export default function SettingsPage() {
     setRepositories(response.repositories || []);
   }
 
+  async function loadBuildInfo() {
+    const response = await api<Health>("/api/health");
+    setBuildInfo(response.build || null);
+  }
+
   useEffect(() => {
-    void Promise.all([load(), loadRepositories()]).catch((e: unknown) =>
+    void Promise.all([load(), loadRepositories(), loadBuildInfo()]).catch((e: unknown) =>
       setMsg(e instanceof Error ? e.message : "加载失败"),
     );
   }, []);
@@ -502,6 +520,55 @@ export default function SettingsPage() {
                     重新查看引导
                   </Button>
                 </div>
+              </div>
+            </LayerCard.Primary>
+          </LayerCard>
+
+          <LayerCard>
+            <LayerCard.Secondary>当前版本</LayerCard.Secondary>
+            <LayerCard.Primary>
+              <div className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-4 gap-y-3">
+                <Text size="xs" variant="secondary">版本</Text>
+                <Text>{buildInfo?.version || "读取中…"}</Text>
+
+                <Text size="xs" variant="secondary">GitHub 仓库</Text>
+                {buildRepository ? (
+                  <a
+                    className="break-all text-sm underline underline-offset-2"
+                    href={buildRepository}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    {buildRepository.replace(/^https?:\/\/github\.com\//, "")}
+                  </a>
+                ) : (
+                  <Text>读取中…</Text>
+                )}
+
+                <Text size="xs" variant="secondary">Commit</Text>
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  {buildCommitURL ? (
+                    <a
+                      className="font-mono text-sm underline underline-offset-2"
+                      href={buildCommitURL}
+                      rel="noreferrer"
+                      target="_blank"
+                      title={buildCommit}
+                    >
+                      {buildCommitLabel}
+                    </a>
+                  ) : (
+                    <code className="text-sm">{buildCommitLabel}</code>
+                  )}
+                  {buildInfo?.dirty ? <Badge variant="secondary">含本地修改</Badge> : null}
+                </div>
+
+                {buildCommitTime ? (
+                  <>
+                    <Text size="xs" variant="secondary">提交时间</Text>
+                    <Text>{buildCommitTime}</Text>
+                  </>
+                ) : null}
               </div>
             </LayerCard.Primary>
           </LayerCard>
