@@ -1,0 +1,30 @@
+{
+  "assetId": "squirrel-mark",
+  "usage": "favicon, browser tab, app icon, compact navigation",
+  "revisions": [
+    {
+      "id": "squirrel-mark-v03",
+      "sourcePath": "design/brand/icons/result/source-v03.png",
+      "status": "superseded"
+    },
+    {
+      "id": "squirrel-mark-v04-transparent",
+      "sourcePath": "design/brand/icons/result/source-v04-transparent.png",
+      "parentId": "squirrel-mark-v03",
+      "change": "Removed the blue background; retained the squirrel, curled tail, paws, and acorn.",
+      "approvedAt": "2026-08-14",
+      "status": "approved"
+    }
+  ],
+  "outputPaths": [
+    "design/brand/icons/result/icon-16.png",
+    "design/brand/icons/result/icon-32.png",
+    "design/brand/icons/result/icon-48.png",
+    "design/brand/icons/result/icon-64.png",
+    "design/brand/icons/result/icon-128.png",
+    "design/brand/icons/result/icon-256.png",
+    "design/brand/icons/result/icon-512.png",
+    "design/brand/icons/result/icon-1024.png",
+    "design/brand/icons/result/favicon.ico"
+  ]
+}

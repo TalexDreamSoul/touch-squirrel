@@ -1,9 +1,11 @@
 "use client";
 
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
   ArchiveIcon,
   BellIcon,
+  BookOpenIcon,
   BinocularsIcon,
   BroadcastIcon,
   CloudArrowUpIcon,
@@ -77,6 +79,10 @@ const navGroups: NavGroup[] = [
     items: [{ href: "/hunter", label: "泄露巡检", icon: BinocularsIcon }],
   },
   {
+    label: "文档",
+    items: [{ href: "/docs", label: "技术说明", icon: BookOpenIcon }],
+  },
+  {
     label: "系统",
     items: [
       { href: "/notifications", label: "通知", icon: BellIcon },
@@ -120,13 +126,23 @@ export function AdminShell({ children }: { children: ReactNode }) {
     >
       <Sidebar className="flex h-screen flex-col">
         <Sidebar.Header className="!flex !w-full !items-center !justify-between !gap-2">
-          <div className="min-w-0 flex-1 overflow-hidden">
-            <Text variant="heading3" as="span">
-              touch-squirrel
-            </Text>
-            <Text variant="secondary" size="xs">
-              插件 · 注册 · 号池
-            </Text>
+          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
+            <Image
+              src="/brand/squirrel-icon.png"
+              alt="松果仓"
+              width={40}
+              height={40}
+              priority
+              className="size-10 shrink-0 rounded-lg"
+            />
+            <div className="min-w-0">
+              <Text variant="heading3" as="span">
+                松果仓
+              </Text>
+              <Text variant="secondary" size="xs">
+                插件 · 注册 · 号池
+              </Text>
+            </div>
           </div>
           <Sidebar.Trigger className="shrink-0" />
         </Sidebar.Header>

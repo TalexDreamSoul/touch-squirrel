@@ -3,8 +3,8 @@ import "./globals.css";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
-  title: "touch-squirrel",
-  description: "touch-squirrel Host · 插件化注册 / 号池 / 联邦",
+  title: "松果仓",
+  description: "松果仓 · 账号注册、凭证囤货与号池调度",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
