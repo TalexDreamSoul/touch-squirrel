@@ -25,6 +25,13 @@ func TestDefaultOfficialRepositoryURL(t *testing.T) {
 	}
 }
 
+func TestMarketAllowsSlowRepositoryDownloads(t *testing.T) {
+	market := NewMarket(t.TempDir(), nil)
+	if got, want := market.client.Timeout, 15*time.Minute; got != want {
+		t.Fatalf("client timeout=%s, want %s", got, want)
+	}
+}
+
 func TestMarketRepositoriesKeepOfficialSource(t *testing.T) {
 	t.Setenv(officialRepositoryEnv, DefaultOfficialRepositoryURL)
 	root := t.TempDir()

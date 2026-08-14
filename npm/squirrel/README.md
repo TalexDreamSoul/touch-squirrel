@@ -25,7 +25,7 @@ Open <http://127.0.0.1:8787>. Running without a subcommand is equivalent to `web
 npx --yes @talex-touch/squirrel@latest web
 ```
 
-To reproduce this release, replace `latest` with `0.2.4`.
+To reproduce this release, replace `latest` with `0.2.5`.
 
 ## Install Plugins
 
