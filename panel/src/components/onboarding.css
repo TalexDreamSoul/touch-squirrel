@@ -1,0 +1,538 @@
+/* 初次引导 —— 3D 折纸入场 + 囤货立方体场景 */
+
+.sq-ob {
+  --sq-surface: var(--color-kumo-elevated, #ffffff);
+  --sq-canvas: var(--color-kumo-canvas, #f6f6f7);
+  --sq-line: var(--color-kumo-hairline, rgba(0, 0, 0, 0.1));
+  --sq-brand: var(--color-kumo-brand, #f6821f);
+  --sq-text: var(--text-color-kumo-default, #1d1d1f);
+  --sq-strong: var(--text-color-kumo-strong, #000000);
+  --sq-subtle: var(--text-color-kumo-subtle, #6e6e73);
+  --sq-cube: var(--color-kumo-neutral-750, #3f3f46);
+
+  --sq-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --sq-u: 54px;
+
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+}
+
+/* perspective 会让所在元素成为 backdrop root，遮罩必须留在它外面才能模糊到页面 */
+.sq-ob__space {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  perspective: 1600px;
+  perspective-origin: 50% 78%;
+}
+
+/* 只承载 SVG 滤镜定义，不占布局 */
+.sq-ob__defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* ---------- 背景 ---------- */
+
+/*
+ * 压暗是必要的：面板 surface 与 canvas 只差 1%，不压暗的话整张纸是隐形的。
+ * 这里不能用 opacity 做淡入 —— 元素自身 opacity < 1 会让它成为 backdrop root，
+ * backdrop-filter 在整个淡入期间会失效。改成直接动画背景色和模糊半径。
+ */
+.sq-ob__backdrop {
+  position: absolute;
+  inset: 0;
+  animation: sq-scrim 520ms ease-out both;
+}
+
+@keyframes sq-scrim {
+  from {
+    background-color: transparent;
+    backdrop-filter: blur(0px) saturate(100%);
+    -webkit-backdrop-filter: blur(0px) saturate(100%);
+  }
+  to {
+    background-color: color-mix(in oklab, #000000 46%, transparent);
+    backdrop-filter: blur(28px) saturate(150%);
+    -webkit-backdrop-filter: blur(28px) saturate(150%);
+  }
+}
+
+/* ---------- 卡片舞台 ---------- */
+
+.sq-ob__stage {
+  position: relative;
+  width: min(880px, 100%);
+  transform-style: preserve-3d;
+  animation: sq-rise 1050ms var(--sq-ease) both;
+  will-change: transform, opacity;
+}
+
+.sq-ob__stage[data-settled="true"] {
+  animation: none;
+  transform: none;
+  transform-style: flat;
+  will-change: auto;
+}
+
+@keyframes sq-rise {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 62vh, -460px) rotateX(54deg) scale(0.9);
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotateX(0deg) scale(1);
+  }
+}
+
+/* ---------- 纸张折叠层（卡片表面由横条组成） ---------- */
+
+/* 不能在这里加 filter：filter 会让 preserve-3d 退化成 flat，折纸就不是 3D 了 */
+.sq-ob__fold {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.sq-ob__strip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--i) * (100% / var(--n)));
+  height: calc(100% / var(--n) + 1px);
+  background: var(--sq-surface);
+  transform-origin: 50% var(--origin);
+  backface-visibility: hidden;
+  animation: sq-unfold 900ms var(--sq-ease) both;
+  animation-delay: calc(var(--d) * 26ms);
+}
+
+.sq-ob__strip:first-child {
+  border-radius: 24px 24px 0 0;
+}
+
+.sq-ob__strip:last-child {
+  border-radius: 0 0 24px 24px;
+}
+
+/* 相邻折面一明一暗，折痕才看得出来；收尾时整层褪掉，静止后不留痕 */
+.sq-ob__strip::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--sq-strong) 44%, transparent),
+    color-mix(in oklab, var(--sq-strong) 4%, transparent)
+  );
+  animation: sq-fade-out 900ms var(--sq-ease) both;
+  animation-delay: calc(var(--d) * 26ms);
+}
+
+.sq-ob__strip:nth-child(even)::after {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--sq-strong) 2%, transparent),
+    color-mix(in oklab, var(--sq-strong) 36%, transparent)
+  );
+}
+
+@keyframes sq-unfold {
+  0% {
+    transform: rotateX(var(--a)) translateZ(var(--z));
+  }
+  100% {
+    transform: rotateX(0deg) translateZ(0);
+  }
+}
+
+/* ---------- 揉搓 / 折射的幽灵纸片 ---------- */
+
+.sq-ob__crumple {
+  position: absolute;
+  inset: 0;
+  border-radius: 24px;
+  transform: translateZ(3px);
+  pointer-events: none;
+  filter: url(#sq-crumple) drop-shadow(0 30px 60px rgba(0, 0, 0, 0.4));
+  background:
+    linear-gradient(
+      104deg,
+      transparent 18%,
+      color-mix(in oklab, #ffffff 62%, transparent) 42%,
+      transparent 64%
+    ),
+    var(--sq-surface);
+  animation: sq-crumple-out 1000ms ease-out both;
+}
+
+@keyframes sq-crumple-out {
+  0% {
+    opacity: 0.92;
+  }
+  70% {
+    opacity: 0.32;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ---------- 内容 ---------- */
+
+.sq-ob__content {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 0;
+  min-height: 520px;
+  border-radius: 24px;
+  border: 1px solid var(--sq-line);
+  overflow: hidden;
+  box-shadow: 0 28px 68px rgba(0, 0, 0, 0.34);
+  animation: sq-content-in 620ms var(--sq-ease) both;
+  animation-delay: 380ms;
+}
+
+/* 纸面折平之后，内容才从表面浮现 */
+@keyframes sq-content-in {
+  from {
+    opacity: 0;
+    transform: translateZ(2px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateZ(2px) scale(1);
+  }
+}
+
+.sq-ob__skip {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+}
+
+/* 立方体场景 */
+.sq-ob__viewport {
+  position: relative;
+  height: 300px;
+  perspective: 1000px;
+  perspective-origin: 50% 46%;
+  overflow: hidden;
+  background:
+    radial-gradient(
+      120% 80% at 50% 8%,
+      color-mix(in oklab, var(--sq-brand) 9%, transparent),
+      transparent 62%
+    ),
+    var(--sq-canvas);
+}
+
+.sq-ob__scene {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  animation: sq-orbit 18s ease-in-out infinite alternate;
+}
+
+@keyframes sq-orbit {
+  from {
+    transform: rotateX(-13deg) rotateY(-21deg);
+  }
+  to {
+    transform: rotateX(-9deg) rotateY(21deg);
+  }
+}
+
+/* 地面接触阴影 */
+.sq-ob__ground {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--sq-u) * 4.4);
+  height: calc(var(--sq-u) * 1.5);
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in oklab, var(--sq-strong) 26%, transparent),
+    transparent
+  );
+  transform: translate3d(-50%, calc(var(--sq-u) * 1.1), 0) rotateX(90deg);
+  filter: blur(6px);
+  transition: opacity 1.05s var(--sq-ease);
+}
+
+/* ---------- 立方体 ---------- */
+
+.sq-ob__cube {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--sq-u) * var(--s, 1));
+  height: calc(var(--sq-u) * var(--s, 1));
+  margin: calc(var(--sq-u) * var(--s, 1) / -2);
+  transform-style: preserve-3d;
+  transform: translate3d(
+      calc(var(--sq-u) * var(--x)),
+      calc(var(--sq-u) * var(--y)),
+      var(--z)
+    )
+    rotateX(var(--rx)) rotateY(var(--ry)) scale(var(--k, 1));
+  opacity: var(--o, 1);
+  transition:
+    transform 1100ms var(--sq-ease),
+    opacity 700ms ease-out;
+  transition-delay: calc(var(--i) * 60ms);
+}
+
+.sq-ob__face {
+  position: absolute;
+  inset: 0;
+  background: var(--tone);
+  border: 1px solid color-mix(in oklab, var(--tone) 74%, black);
+  backface-visibility: hidden;
+}
+
+.sq-ob__cube[data-brand="true"] {
+  --tone-base: var(--sq-brand);
+}
+
+.sq-ob__cube {
+  --tone-base: var(--sq-cube);
+  --h: calc(var(--sq-u) * var(--s, 1) / 2);
+}
+
+.sq-ob__face--front {
+  --tone: color-mix(in oklab, var(--tone-base) 92%, white);
+  transform: translateZ(var(--h));
+}
+.sq-ob__face--back {
+  --tone: color-mix(in oklab, var(--tone-base) 78%, black);
+  transform: rotateY(180deg) translateZ(var(--h));
+}
+.sq-ob__face--right {
+  --tone: color-mix(in oklab, var(--tone-base) 84%, black);
+  transform: rotateY(90deg) translateZ(var(--h));
+}
+.sq-ob__face--left {
+  --tone: color-mix(in oklab, var(--tone-base) 70%, black);
+  transform: rotateY(-90deg) translateZ(var(--h));
+}
+.sq-ob__face--top {
+  --tone: color-mix(in oklab, var(--tone-base) 62%, white);
+  transform: rotateX(90deg) translateZ(var(--h));
+}
+.sq-ob__face--bottom {
+  --tone: color-mix(in oklab, var(--tone-base) 60%, black);
+  transform: rotateX(-90deg) translateZ(var(--h));
+}
+
+/* ---------- 文案 ---------- */
+
+.sq-ob__copy {
+  padding: 32px 40px 8px;
+  background: var(--sq-surface);
+  perspective: 700px;
+}
+
+.sq-ob__eyebrow {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--sq-brand);
+}
+
+/* 首屏的品牌标识：图标 + 名字 */
+.sq-ob__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--sq-strong);
+  animation: sq-char 700ms var(--sq-ease) both;
+  animation-delay: 460ms;
+}
+
+.sq-ob__mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.sq-ob__title {
+  margin: 0 0 12px;
+  /* 预留两行：标题行数在各步之间会变，不占住高度卡片会跳 */
+  min-height: 2.36em;
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.18;
+  color: var(--sq-strong);
+}
+
+.sq-ob__line {
+  display: block;
+}
+
+.sq-ob__char {
+  display: inline-block;
+  white-space: pre;
+  animation: sq-char 760ms var(--sq-ease) both;
+  animation-delay: calc(var(--ci) * 42ms + var(--base, 0ms));
+}
+
+@keyframes sq-char {
+  0% {
+    opacity: 0;
+    transform: translateY(0.55em) rotateX(-52deg);
+    filter: blur(7px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+}
+
+.sq-ob__desc {
+  margin: 0;
+  max-width: 46em;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--sq-subtle);
+  animation: sq-char 700ms var(--sq-ease) both;
+  animation-delay: 420ms;
+}
+
+/* ---------- 底部操作栏 ---------- */
+
+.sq-ob__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 40px 28px;
+  background: var(--sq-surface);
+}
+
+.sq-ob__dots {
+  display: flex;
+  gap: 8px;
+}
+
+.sq-ob__dot {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--sq-strong) 22%, transparent);
+  cursor: pointer;
+  transition:
+    width 420ms var(--sq-ease),
+    background 300ms ease;
+}
+
+.sq-ob__dot[aria-current="true"] {
+  width: 22px;
+  background: var(--sq-brand);
+}
+
+.sq-ob__dot:focus-visible {
+  outline: 2px solid var(--color-kumo-focus, var(--sq-brand));
+  outline-offset: 3px;
+}
+
+/* ---------- 通用关键帧 ---------- */
+
+@keyframes sq-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sq-fade-out {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* ---------- 退场 ---------- */
+
+.sq-ob[data-leaving="true"] .sq-ob__backdrop {
+  animation: sq-scrim 320ms ease-in reverse both;
+}
+
+.sq-ob[data-leaving="true"] .sq-ob__stage {
+  animation: sq-sink 380ms cubic-bezier(0.4, 0, 1, 1) both;
+  transform-style: preserve-3d;
+}
+
+@keyframes sq-sink {
+  to {
+    opacity: 0;
+    transform: translate3d(0, 12vh, -220px) rotateX(18deg) scale(0.96);
+  }
+}
+
+/* ---------- 减少动态效果 ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .sq-ob__stage,
+  .sq-ob[data-leaving="true"] .sq-ob__stage {
+    animation: sq-fade 200ms ease-out both;
+    transform: none;
+  }
+
+  .sq-ob__strip,
+  .sq-ob__strip::after,
+  .sq-ob__char,
+  .sq-ob__desc,
+  .sq-ob__brand,
+  .sq-ob__content {
+    animation: none;
+    transform: none;
+    opacity: 1;
+    filter: none;
+  }
+
+  .sq-ob__strip::after,
+  .sq-ob__crumple {
+    display: none;
+  }
+
+  .sq-ob__scene {
+    animation: none;
+    transform: rotateX(-11deg) rotateY(-16deg);
+  }
+
+  .sq-ob__cube {
+    transition-duration: 1ms;
+    transition-delay: 0ms;
+  }
+
+  .sq-ob__backdrop {
+    animation-duration: 150ms;
+  }
+}

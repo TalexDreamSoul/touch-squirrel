@@ -25,6 +25,7 @@ import {
 } from "@cloudflare/kumo";
 import type { ReactNode } from "react";
 import { useAuth } from "@/lib/auth";
+import { Onboarding } from "@/components/onboarding";
 
 type NavItem = {
   href: string;
@@ -181,6 +182,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
         </div>
         {children}
       </main>
+
+      <Onboarding />
     </Sidebar.Provider>
   );
 }
