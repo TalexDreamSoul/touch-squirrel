@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack -p 3007",
-    "build": "next build",
+    "build:docs": "node ../scripts/build-doc-index.mjs",
+    "build": "npm run build:docs && next build",
     "start": "next start -p 3007",
     "lint": "eslint"
   },
