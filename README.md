@@ -35,27 +35,85 @@
 
 ## 立即使用
 
-需要 Node.js 20+。无需克隆仓库或预装 Go：
+需要 Node.js 20+，支持 macOS arm64/amd64、Linux arm64/amd64 和 Windows amd64。无需克隆仓库，也无需预装 Go。
+
+### 使用 npx（推荐）
+
+先检查运行环境：
 
 ```bash
-npx @talex-touch/squirrel
+npx --yes @talex-touch/squirrel@latest doctor
 ```
 
-无参数命令会准备并启动本地 Web 管理器，默认地址为 <http://127.0.0.1:8787>。首次运行会从 GitHub Release 下载当前平台的 Go Host，校验 SHA-256 后缓存；不会预装任何功能插件。
+启动本地 Web 管理器：
 
 ```bash
-npx @talex-touch/squirrel doctor   # 启动前诊断
-npx @talex-touch/squirrel web      # 显式启动管理器
+npx --yes @talex-touch/squirrel@latest
 ```
 
-进入「插件 → 插件市场」，同步 `TalexDreamSoul/touch-squirrel` 官方源，再安装需要的注册器、号池或 Bridge。插件保存在 `~/.touch-squirrel/plugins/`，与 npm 启动包和 Host 二进制独立更新。
+浏览器访问 <http://127.0.0.1:8787>。无参数命令等同于 `web`；需要显式指定时可执行：
 
-全局安装后可以直接使用 `squirrel`：
+```bash
+npx --yes @talex-touch/squirrel@latest web
+```
+
+首次运行时，npm 启动器会从对应版本的 [GitHub Release](https://github.com/TalexDreamSoul/touch-squirrel/releases) 下载当前平台的 Go Host，按 `checksums.txt` 校验 SHA-256 后缓存。后续启动会直接复用缓存，不会重复下载。
+
+需要固定版本时，将 `latest` 替换为具体版本：
+
+```bash
+npx --yes @talex-touch/squirrel@0.2.3 doctor
+```
+
+### 安装功能插件
+
+新环境默认不携带任何注册器、号池或 Bridge 插件：Host 只提供 Web 管理器、任务、产物、存储和插件运行时。
+
+1. 启动 Web 管理器并打开「插件」。
+2. 进入「插件市场」，同步 `TalexDreamSoul/touch-squirrel` 官方源。
+3. 选择需要的插件，点击安装并按需启用。
+
+插件安装到 `~/.touch-squirrel/plugins/`，可独立于 npm 启动器和 Host 更新。第三方插件属于可执行代码，只添加可信 GitHub 仓库；插件清单与运行时契约见 [Plugin IDL](docs/contracts/plugin-idl.md)。
+
+### 全局安装
+
+希望长期使用短命令时，可以全局安装：
 
 ```bash
 npm install --global @talex-touch/squirrel
-squirrel
 squirrel doctor
+squirrel
+```
+
+更新到最新版：
+
+```bash
+npm update --global @talex-touch/squirrel
+```
+
+### 常用配置
+
+| 环境变量 | 用途 | 默认值 |
+|---|---|---|
+| `SQUIRREL_HOME` | Host 数据、插件与产物目录 | `~/.touch-squirrel` |
+| `SQUIRREL_CACHE_DIR` | npm 启动器的 Host 二进制缓存 | npm 用户缓存目录 |
+| `SQUIRREL_BINARY` | 跳过下载，改用指定的本地 Host | 未设置 |
+| `PANEL_ADDR` | Web 管理器监听地址 | `127.0.0.1:8787` |
+| `PANEL_TOKEN` | 为 Web 管理器启用 Token 鉴权 | 未设置 |
+
+macOS / Linux 示例：
+
+```bash
+PANEL_ADDR=127.0.0.1:9797 SQUIRREL_HOME="$HOME/.touch-squirrel-dev" \
+  npx --yes @talex-touch/squirrel@latest
+```
+
+Windows PowerShell 示例：
+
+```powershell
+$env:PANEL_ADDR = "127.0.0.1:9797"
+$env:SQUIRREL_HOME = "$HOME/.touch-squirrel-dev"
+npx --yes @talex-touch/squirrel@latest
 ```
 
 ### 从源码开发
