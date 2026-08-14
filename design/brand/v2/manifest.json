@@ -1,0 +1,45 @@
+{
+  "project": "songguocang-brand-v2",
+  "brand": "松果仓",
+  "positioning": "可插拔的账号、凭证与号池运行时",
+  "slogan": "囤得住 · 派得准",
+  "principles": [
+    "克制、安静、清晰",
+    "真实产品优先，插画只解释系统隐喻",
+    "中性色为主，松鼠橙只用于关键状态与品牌识别",
+    "技术图保持结构化、可编辑和可验证"
+  ],
+  "references": [
+    "references/squirrel-icon.png",
+    "../../../docs/assets/readme/product-settings.png"
+  ],
+  "assets": [
+    {
+      "id": "readme-hero",
+      "usage": "README 顶部产品宣传横幅",
+      "size": "1536x864",
+      "prompt": "Create a restrained wide README hero image from the supplied 松果仓 desktop product screenshot. The primary subject is the real admin interface, kept crisp, recognizable, straight-on and implementation-faithful. Recompose it as a polished product presentation on a true off-white canvas with graphite details and pine-cone orange as the only accent, covering less than 6% of the image. Let the interface occupy most of the frame with generous breathing room; add one small sophisticated thin-line squirrel carrying an acorn along the lower edge as a quiet brand signature, not a hero mascot. Preserve the Chinese UI context but do not invent or rewrite interface labels. No headline or slogan inside the image because README text will sit outside it. Intended use: GitHub README hero at desktop and mobile widths; key interface and squirrel must remain legible when reduced. Full 16:9 composition, 1536x864. No gradient, no glassmorphism, no dark theme, no large orange blocks, no 3D mascot, no extra subjects, no random text, no watermark, no browser mockup chrome, no cropped navigation, no malformed anatomy, and no identity drift.",
+      "candidate": "candidates/readme-hero-v01.png",
+      "approved": "../../../docs/assets/readme/hero.png",
+      "status": "planned"
+    },
+    {
+      "id": "operations-promo",
+      "usage": "README 能力概览宣传图",
+      "size": "1536x1024",
+      "prompt": "Using the supplied 松果仓 squirrel icon as identity reference, create one clean horizontal product illustration that explains the warehouse metaphor without text. One small geometric adult squirrel moves a single acorn through four connected operational stations: plugin intake, registration workflow, credential storage, and healthy pool dispatch. The stations should read as a precise developer-tool system through simple trays, rails, status dots and compact interface fragments, not as a literal warehouse or children's scene. Palette: true off-white background, graphite linework, pale neutral gray surfaces, signature squirrel orange only on the squirrel and one acorn, under 8% total coverage. Flat 2D line illustration with subtle solid fills, crisp at README width, strong left-to-right flow and generous negative space. Intended use: feature overview section in a GitHub README. No text, labels, logos, gradients, 3D rendering, shadows, decorative blobs, extra animals, unrelated props, cropped anatomy, malformed limbs, watermark, or identity drift. 3:2 horizontal composition, 1536x1024.",
+      "candidate": "candidates/operations-promo-v01.png",
+      "approved": "../../../docs/assets/readme/operations.png",
+      "status": "planned"
+    },
+    {
+      "id": "brand-ip-board",
+      "usage": "品牌 IP v2 视觉设定板",
+      "size": "1536x1024",
+      "prompt": "Create a premium 3 by 3 brand identity board for 松果仓 using the supplied orange squirrel icon as the strict identity anchor. The brand idea is a calm warehouse operator for developer credentials: store safely, dispatch precisely. Show one primary simplified squirrel mark, one monochrome line version, three restrained functional poses (receiving an acorn, checking inventory, dispatching an acorn), one acorn-and-tail construction motif, a compact color system dominated by white and graphite with signature pine-cone orange, one small desktop UI application, and one favicon/application detail. Style is flat, geometric, adult, precise and quiet; clean grid, narrow consistent gutters, true off-white canvas, thin graphite lines, orange under 12%. Minimal exact text only: 松果仓 and 囤得住 · 派得准; no other copy. Intended use: brand IP art direction and documentation. Keep the squirrel's upright ears, white muzzle, blue eyes, orange face/tail, compact silhouette and acorn association consistent. No blue-dominant palette, no gradient, no 3D toy rendering, no childish stickers, no merchandise mockup clutter, no random text, no watermark, no duplicate inconsistent mascot, no cropped anatomy, and no identity drift. 3:2 horizontal board, 1536x1024.",
+      "candidate": "candidates/brand-ip-board-v01.png",
+      "approved": "approved/brand-ip-board.png",
+      "status": "planned"
+    }
+  ]
+}
