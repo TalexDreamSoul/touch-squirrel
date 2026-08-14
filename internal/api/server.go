@@ -24,6 +24,7 @@ import (
 	"github.com/grok-free-register/grok-reg/internal/config"
 	"github.com/grok-free-register/grok-reg/internal/cpa"
 	"github.com/grok-free-register/grok-reg/internal/daemon"
+	"github.com/grok-free-register/grok-reg/internal/degrade"
 	"github.com/grok-free-register/grok-reg/internal/home"
 	"github.com/grok-free-register/grok-reg/internal/hunter"
 	"github.com/grok-free-register/grok-reg/internal/jobs"
@@ -50,6 +51,7 @@ type Server struct {
 	mux            *http.ServeMux
 	transfer       *transfer.Service
 	patrol         *patrol.Service
+	degrade        *degrade.Service
 	cluster        *cluster.Service
 	status         *statuspage.Service
 	localPool      *localpool.Service
@@ -94,6 +96,18 @@ func New(opt Options) *Server {
 			return err
 		})
 	s.patrol.SetPipelineChecker(s.pipelineRunning)
+	degradeState := opt.Paths.DegradeState
+	if degradeState == "" && opt.Paths.Root != "" {
+		degradeState = filepath.Join(opt.Paths.Root, "degrade-state.json")
+	}
+	s.degrade = degrade.New(degradeState,
+		func() config.Config {
+			cfg, _ := config.Load(opt.Paths.Config)
+			return cfg
+		},
+		func(cfg config.Config) degrade.ManagementAPI {
+			return cpa.NewClient(cfg.CPAManagementBase, cfg.CPAManagementKey, max(cfg.CPAUploadTimeoutSec, 30))
+		})
 	s.cluster = cluster.New(opt.Paths.ClusterState, func() config.Config {
 		cfg, _ := config.Load(opt.Paths.Config)
 		return cfg
@@ -273,6 +287,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/pool/patrol", s.handlePoolPatrol)
 	s.mux.HandleFunc("GET /api/pool/patrol/history", s.handlePoolPatrolHistory)
 	s.mux.HandleFunc("GET /api/pool/logs", s.handlePoolLogs)
+	s.mux.HandleFunc("GET /api/degrade/overview", s.handleDegradeOverview)
+	s.mux.HandleFunc("GET /api/degrade/accounts", s.handleDegradeAccounts)
+	s.mux.HandleFunc("POST /api/degrade/scan", s.handleDegradeScan)
+	s.mux.HandleFunc("POST /api/degrade/isolate", s.handleDegradeIsolate)
 	s.mux.HandleFunc("POST /api/pool/cleanup", s.handlePoolCleanup)
 
 	// cluster / federation (master–slave)

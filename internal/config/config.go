@@ -121,6 +121,15 @@ type Config struct {
 	PatrolConcurrency int
 	QuotaPerAccount   int
 
+	// 降智检测 (silent model downgrade). Each check is a real billed request
+	// against one account, so scans are sampled and paced by the same per-exit
+	// account limit that causes the flag in the first place.
+	DegradeModel          string
+	DegradeSample         int
+	DegradeRecheckMin     int
+	DegradeExitWindowMin  int
+	DegradeExitAccountCap int
+
 	// Auto refill (自动补号)
 	RefillEnabled     bool
 	RefillMinHealthy  int
@@ -203,6 +212,11 @@ func Defaults() Config {
 		PatrolDeepProbe:              false,
 		PatrolConcurrency:            10,
 		QuotaPerAccount:              60,
+		DegradeModel:                 "grok-4.6",
+		DegradeSample:                5,
+		DegradeRecheckMin:            120,
+		DegradeExitWindowMin:         10,
+		DegradeExitAccountCap:        5,
 		RefillEnabled:                false,
 		RefillMinHealthy:             5,
 		RefillBatch:                  10,
@@ -317,6 +331,11 @@ func Save(path string, cfg Config) error {
 	b.WriteString(fmt.Sprintf("PATROL_DEEP_PROBE=%s\n", bool01(cfg.PatrolDeepProbe)))
 	b.WriteString(fmt.Sprintf("PATROL_CONCURRENCY=%d\n", cfg.PatrolConcurrency))
 	b.WriteString(fmt.Sprintf("QUOTA_PER_ACCOUNT=%d\n", cfg.QuotaPerAccount))
+	b.WriteString(fmt.Sprintf("DEGRADE_MODEL=%s\n", cfg.DegradeModel))
+	b.WriteString(fmt.Sprintf("DEGRADE_SAMPLE=%d\n", cfg.DegradeSample))
+	b.WriteString(fmt.Sprintf("DEGRADE_RECHECK_MIN=%d\n", cfg.DegradeRecheckMin))
+	b.WriteString(fmt.Sprintf("DEGRADE_EXIT_WINDOW_MIN=%d\n", cfg.DegradeExitWindowMin))
+	b.WriteString(fmt.Sprintf("DEGRADE_EXIT_ACCOUNT_CAP=%d\n", cfg.DegradeExitAccountCap))
 	b.WriteString(fmt.Sprintf("REFILL_ENABLED=%s\n", bool01(cfg.RefillEnabled)))
 	b.WriteString(fmt.Sprintf("REFILL_MIN_HEALTHY=%d\n", cfg.RefillMinHealthy))
 	b.WriteString(fmt.Sprintf("REFILL_BATCH=%d\n", cfg.RefillBatch))
@@ -650,6 +669,29 @@ func applyMap(cfg *Config, env map[string]string) {
 	if v, ok := env["QUOTA_PER_ACCOUNT"]; ok {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.QuotaPerAccount = n
+		}
+	}
+	if v, ok := env["DEGRADE_MODEL"]; ok && strings.TrimSpace(v) != "" {
+		cfg.DegradeModel = strings.TrimSpace(v)
+	}
+	if v, ok := env["DEGRADE_SAMPLE"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.DegradeSample = n
+		}
+	}
+	if v, ok := env["DEGRADE_RECHECK_MIN"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.DegradeRecheckMin = n
+		}
+	}
+	if v, ok := env["DEGRADE_EXIT_WINDOW_MIN"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.DegradeExitWindowMin = n
+		}
+	}
+	if v, ok := env["DEGRADE_EXIT_ACCOUNT_CAP"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.DegradeExitAccountCap = n
 		}
 	}
 	if v, ok := env["REFILL_ENABLED"]; ok {

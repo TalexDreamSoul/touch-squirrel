@@ -30,6 +30,7 @@ type Paths struct {
 	ExportsDir   string // export job zip volumes
 	UploadCache  string // upload dedup cache json
 	PatrolState  string // pool patrol snapshot json
+	DegradeState string // 降智检测 verdicts + exit window json
 	ClusterState string // federation node registry / meta
 	StatusLayout string // public status page layout json
 	LocalPool    string // local credential pool dir
@@ -87,6 +88,7 @@ func Resolve() (Paths, error) {
 		ExportsDir:   filepath.Join(root, "exports"),
 		UploadCache:  filepath.Join(root, "upload-cache.json"),
 		PatrolState:  filepath.Join(root, "patrol-state.json"),
+		DegradeState: filepath.Join(root, "degrade-state.json"),
 		ClusterState: filepath.Join(root, "cluster-state.json"),
 		StatusLayout: filepath.Join(root, "status-layout.json"),
 		LocalPool:    filepath.Join(root, "local-pool"),
