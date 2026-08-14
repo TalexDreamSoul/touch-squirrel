@@ -350,22 +350,17 @@
 }
 
 /*
- * 水面层：透视从 viewport 挪到这里——波动滤镜必须和透视同层。
- * 滤镜挂在再往里的任何 preserve-3d 层都会把 3D 拍扁；挂在 viewport 上
- * 又会把背景和 halo 一起卷进隔离组。这里 transform-style 本来就是 flat
- * （透视投影的终点），加滤镜不改变任何 3D 语义。
+ * 水面层：透视从 viewport 挪到这里，换阵型时 JS 对它做一次阻尼晃动
+ * （WAAPI，transform + 小半径 blur，全走合成器）。晃动挂在再往里的任何
+ * preserve-3d 层都会互相覆盖 transform；挂在 viewport 上又会把背景和
+ * halo 一起晃。这里 transform-style 本来就是 flat（透视投影的终点），
+ * 整体变换不改变任何 3D 语义。
  */
 .sq-ob__water {
   position: absolute;
   inset: 0;
   perspective: 900px;
   perspective-origin: 50% 44%;
-}
-
-/* 只在波动期间挂滤镜：常驻会让 20s 空转动画每帧都过一遍滤镜合成 */
-.sq-ob__water[data-ripple="true"] {
-  filter: url(#sq-ripple);
-  will-change: filter;
 }
 
 /* 空转在外层，指针视差在内层，两个 transform 才不会互相覆盖 */
@@ -477,18 +472,23 @@
  * 所以镜像是 y' = 3.02u - y，即先 scaleY(-1) 再下移 3.02u。
  * scaleY(-1) 会翻转绕序，必须放开 backface-visibility，否则面全部消失。
  */
+/*
+ * 倒影容器上的 opacity 会把整组倒影拍扁——这里是刻意的：拍扁后整组只是
+ * 一张合成纹理，真 3D 倒影是几十张逐帧排序的半透明面片，空转动画会一直
+ * 背这个开销。水面反射本来就该是压扁模糊的，视觉上不亏。透明度恒定不变，
+ * 不存在主立方体那种过渡中途 3D/扁平来回切的跳变。
+ */
 .sq-ob__mirror {
   position: absolute;
   inset: 0;
   transform-style: preserve-3d;
   transform: translate3d(0, calc(var(--sq-u) * 3.02), 0) scaleY(-1);
+  opacity: 0.34;
 }
 
-/* 倒影的压暗同样只能落在面上：容器 opacity 会把整组倒影拍扁成纸片 */
 .sq-ob__mirror .sq-ob__face {
   backface-visibility: visible;
   box-shadow: none;
-  opacity: calc(var(--o, 1) * 0.34);
 }
 
 /* 倒影的衰减：用 2D 渐变把远处压回舞台底色，比给 3D 容器加 mask 安全 */

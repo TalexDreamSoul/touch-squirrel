@@ -190,8 +190,6 @@ export function Onboarding() {
   const rootRef = useRef<HTMLDivElement>(null);
   const displaceRef = useRef<SVGFEDisplacementMapElement>(null);
   const waterRef = useRef<HTMLDivElement>(null);
-  const rippleNoiseRef = useRef<SVGFETurbulenceElement>(null);
-  const rippleDisplaceRef = useRef<SVGFEDisplacementMapElement>(null);
   const prevStepRef = useRef(0);
 
   // 只在客户端判定首帧，避免静态导出的 SSR 产物与水合结果不一致
@@ -257,47 +255,44 @@ export function Onboarding() {
     return () => cancelAnimationFrame(raf);
   }, [open]);
 
-  // 换阵型时整个水面过一道衰减波：位移快速涌到峰值，再按指数拖尾收干，
-  // 频率随衰减略微收紧。参考 nexus 首页 EventHorizon 的入场波前（damped ring）。
+  // 换阵型时整个水面阻尼晃两下再收平，配一丝入水失焦。参考 nexus 首页
+  // EventHorizon 的衰减波前，但不用 SVG 位移滤镜——feTurbulence 每帧重算
+  // 噪声走的是主线程软件路径，这个面积上必然整段掉帧；transform + 小半径
+  // blur 走合成器，才能稳住 60fps。
   useEffect(() => {
     if (prevStepRef.current === step) return;
     prevStepRef.current = step;
     if (prefersReducedMotion()) return;
     const water = waterRef.current;
-    const displace = rippleDisplaceRef.current;
-    const noise = rippleNoiseRef.current;
-    if (!water || !displace || !noise) return;
-    // 滤镜只在波动期间挂上，平时不进滤镜合成，空转动画不背这个开销
-    water.dataset.ripple = "true";
-    const DURATION = 1000;
-    const PEAK = 26;
-    const RISE = 0.16;
-    let start = 0;
-    let raf = 0;
-    const done = () => {
-      displace.setAttribute("scale", "0");
-      delete water.dataset.ripple;
-    };
-    const tick = (now: number) => {
-      if (!start) start = now;
-      const t = Math.min(1, (now - start) / DURATION);
-      const env =
-        t < RISE
-          ? Math.sin(((t / RISE) * Math.PI) / 2)
-          : Math.exp(-((t - RISE) / (1 - RISE)) * 3.6);
-      displace.setAttribute("scale", (PEAK * env).toFixed(2));
-      noise.setAttribute(
-        "baseFrequency",
-        `0.009 ${(0.022 + 0.01 * (1 - env)).toFixed(4)}`,
-      );
-      if (t < 1) raf = requestAnimationFrame(tick);
-      else done();
-    };
-    raf = requestAnimationFrame(tick);
-    return () => {
-      cancelAnimationFrame(raf);
-      done();
-    };
+    if (!water) return;
+    water.getAnimations().forEach((a) => a.cancel());
+    water.animate(
+      [
+        { transform: "translateY(0) rotateX(0deg)", filter: "blur(0px)" },
+        {
+          transform: "translateY(6px) rotateX(0.9deg)",
+          filter: "blur(1px)",
+          offset: 0.16,
+        },
+        {
+          transform: "translateY(-3.4px) rotateX(-0.55deg)",
+          filter: "blur(0.5px)",
+          offset: 0.4,
+        },
+        {
+          transform: "translateY(1.8px) rotateX(0.3deg)",
+          filter: "blur(0.2px)",
+          offset: 0.64,
+        },
+        {
+          transform: "translateY(-0.7px) rotateX(-0.12deg)",
+          filter: "blur(0px)",
+          offset: 0.84,
+        },
+        { transform: "translateY(0) rotateX(0deg)", filter: "blur(0px)" },
+      ],
+      { duration: 950, easing: "ease-in-out" },
+    );
   }, [step]);
 
   useEffect(() => {
@@ -406,25 +401,6 @@ export function Onboarding() {
             in="SourceGraphic"
             in2="noise"
             scale={64}
-            xChannelSelector="R"
-            yChannelSelector="G"
-          />
-        </filter>
-        {/* 换阵型时给整个 3D 水面用的折射波，scale 由 JS 按衰减包络驱动 */}
-        <filter id="sq-ripple" x="-8%" y="-8%" width="116%" height="116%">
-          <feTurbulence
-            ref={rippleNoiseRef}
-            type="turbulence"
-            baseFrequency="0.009 0.022"
-            numOctaves={2}
-            seed={3}
-            result="wave"
-          />
-          <feDisplacementMap
-            ref={rippleDisplaceRef}
-            in="SourceGraphic"
-            in2="wave"
-            scale={0}
             xChannelSelector="R"
             yChannelSelector="G"
           />
