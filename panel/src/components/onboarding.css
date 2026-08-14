@@ -729,9 +729,13 @@
   perspective: 700px;
 }
 
+/* 和 .sq-ob__brand 同高（32px 图标行 + 12px 间距）：眉标在品牌行与普通行
+   之间切换时，这一段的高度差会直接变成整张弹窗的高度抖动 */
 .sq-ob__eyebrow {
-  display: block;
-  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  margin-bottom: 12px;
   font-size: 12px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -796,6 +800,8 @@
 .sq-ob__desc {
   margin: 0;
   max-width: 46em;
+  /* 预留两行：各步描述在一两行之间变，不占住高度弹窗会抖 */
+  min-height: 3.4em;
   font-size: 15px;
   line-height: 1.7;
   color: var(--sq-subtle);
