@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,7 +25,9 @@ const (
 	StatusDiscard Status = "discarded"
 )
 
-// Artifact is the host-level unit of “囤货”.
+var ErrNotFound = errors.New("artifact not found")
+
+// Artifact is the host-level unit of stored plugin output.
 type Artifact struct {
 	ID         string            `json:"id"`
 	Plugin     string            `json:"plugin"`
@@ -165,6 +168,24 @@ func (s *Store) List(plugin, kind string, limit int) ([]Artifact, error) {
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// Get returns one artifact by its host-generated ID.
+func (s *Store) Get(id string) (Artifact, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Artifact{}, ErrNotFound
+	}
+	list, err := s.List("", "", 0)
+	if err != nil {
+		return Artifact{}, err
+	}
+	for _, a := range list {
+		if a.ID == id {
+			return a, nil
+		}
+	}
+	return Artifact{}, ErrNotFound
 }
 
 // PutJSON is a helper for plugins: marshal payload and store.

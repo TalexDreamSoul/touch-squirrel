@@ -166,7 +166,7 @@ func printHelp() {
   %s start [-t N]             兼容：等同 run xai-accounts
   %s pool keys list|add       tavily-pool 密钥管理
   %s pool serve [--addr]      启动 tavily-pool HTTP/MCP 代理
-  %s artifacts list           列出统一囤货产物
+  %s artifacts list           列出统一插件产物
   %s status                   查看运行状态与进度
   %s stop                     立即停止注册机
   %s logs [-f]                查看最近一次运行日志；-f 实时跟踪

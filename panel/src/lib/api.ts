@@ -209,10 +209,16 @@ export type ArtifactInfo = {
   plugin: string;
   kind: string;
   status: string;
+  email?: string;
+  account?: string;
+  channel?: string;
+  filename: string;
   labels?: Record<string, string>;
   run_id?: string;
   created_at: string;
   updated_at?: string;
+  payload?: unknown;
+  secret_refs?: string[];
 };
 
 export type TavilyKeyInfo = {

@@ -1,10 +1,14 @@
 package api
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -178,45 +182,290 @@ func (s *Server) handlePluginMarketInstall(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func (s *Server) handleArtifactsList(w http.ResponseWriter, r *http.Request) {
-	pluginID := r.URL.Query().Get("plugin")
-	kind := r.URL.Query().Get("kind")
-	limit := 50
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
+const (
+	maxArtifactDownloadBytes = 64 << 20
+	maxArtifactBatchBytes    = 256 << 20
+	maxArtifactBatchItems    = 500
+)
+
+type artifactSummary struct {
+	ID         string            `json:"id"`
+	Plugin     string            `json:"plugin"`
+	Kind       string            `json:"kind"`
+	Status     artifact.Status   `json:"status"`
+	Email      string            `json:"email,omitempty"`
+	Account    string            `json:"account,omitempty"`
+	Channel    string            `json:"channel,omitempty"`
+	Filename   string            `json:"filename"`
+	Labels     map[string]string `json:"labels,omitempty"`
+	RunID      string            `json:"run_id,omitempty"`
+	CreatedAt  string            `json:"created_at"`
+	UpdatedAt  string            `json:"updated_at,omitempty"`
+	Payload    json.RawMessage   `json:"payload,omitempty"`
+	SecretRefs []string          `json:"secret_refs,omitempty"`
+}
+
+func handleArtifactSummary(a artifact.Artifact, includePayload bool) artifactSummary {
+	payload := map[string]any{}
+	_ = json.Unmarshal(a.Payload, &payload)
+	first := func(keys ...string) string {
+		for _, key := range keys {
+			if value := strings.TrimSpace(a.Labels[key]); value != "" {
+				return value
+			}
+			if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+		return ""
+	}
+	email := first("email", "mail")
+	account := first("username", "account", "login", "name")
+	channel := first("channel", "provider", "platform", "source")
+	if channel == "" {
+		parts := strings.Split(a.Kind, ".")
+		if len(parts) > 1 {
+			suffix := parts[len(parts)-1]
+			switch suffix {
+			case "xai", "outlook", "tavily", "github", "chatgpt", "claude", "grok":
+				channel = suffix
+			}
 		}
 	}
-	st := artifact.NewStore(s.opt.Paths.ArtifactsDir)
-	list, err := st.List(pluginID, kind, limit)
+	if channel == "" {
+		channel = strings.TrimSuffix(a.Plugin, "-registrar")
+		channel = strings.TrimSuffix(channel, "-accounts")
+		channel = strings.TrimSuffix(channel, "-pool")
+	}
+	filename := first("source_file", "filename")
+	if filename == "" {
+		filename = a.ID + ".json"
+	}
+	row := artifactSummary{
+		ID: a.ID, Plugin: a.Plugin, Kind: a.Kind, Status: a.Status,
+		Email: email, Account: account, Channel: channel,
+		Filename: filepath.Base(filename), Labels: a.Labels, RunID: a.RunID,
+		CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
+	}
+	if includePayload {
+		row.Payload = a.Payload
+		row.SecretRefs = a.SecretRefs
+	}
+	return row
+}
+
+func artifactMatches(row artifactSummary, labels map[string]string, query string) bool {
+	if query == "" {
+		return true
+	}
+	values := []string{row.ID, row.Plugin, row.Kind, string(row.Status), row.Email, row.Account, row.Channel, row.Filename, row.RunID}
+	for key, value := range labels {
+		values = append(values, key, value)
+	}
+	return strings.Contains(strings.ToLower(strings.Join(values, " ")), query)
+}
+
+func sortedArtifactFacet(values map[string]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *Server) handleArtifactsList(w http.ResponseWriter, r *http.Request) {
+	pluginID := strings.TrimSpace(r.URL.Query().Get("plugin"))
+	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	channel := strings.TrimSpace(r.URL.Query().Get("channel"))
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	limit := 50
+	if value := r.URL.Query().Get("limit"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			limit = min(parsed, 200)
+		}
+	}
+	page := 1
+	if value := r.URL.Query().Get("page"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+
+	store := artifact.NewStore(s.opt.Paths.ArtifactsDir)
+	list, err := store.List("", "", 0)
 	if err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	// strip heavy/secret payload by default; include labels + meta only
-	rows := make([]map[string]any, 0, len(list))
 	includePayload := r.URL.Query().Get("payload") == "1"
-	for _, a := range list {
-		row := map[string]any{
-			"id":         a.ID,
-			"plugin":     a.Plugin,
-			"kind":       a.Kind,
-			"status":     a.Status,
-			"labels":     a.Labels,
-			"run_id":     a.RunID,
-			"created_at": a.CreatedAt,
-			"updated_at": a.UpdatedAt,
+	plugins := map[string]struct{}{}
+	kinds := map[string]struct{}{}
+	channels := map[string]struct{}{}
+	statuses := map[string]struct{}{}
+	rows := make([]artifactSummary, 0, len(list))
+	for _, item := range list {
+		row := handleArtifactSummary(item, includePayload)
+		plugins[row.Plugin] = struct{}{}
+		kinds[row.Kind] = struct{}{}
+		channels[row.Channel] = struct{}{}
+		statuses[string(row.Status)] = struct{}{}
+		if pluginID != "" && row.Plugin != pluginID {
+			continue
 		}
-		if includePayload {
-			row["payload"] = json.RawMessage(a.Payload)
+		if kind != "" && row.Kind != kind {
+			continue
+		}
+		if status != "" && string(row.Status) != status {
+			continue
+		}
+		if channel != "" && row.Channel != channel {
+			continue
+		}
+		if !artifactMatches(row, item.Labels, query) {
+			continue
 		}
 		rows = append(rows, row)
 	}
-	writeJSON(w, 200, map[string]any{
-		"ok":        true,
-		"artifacts": rows,
-		"store":     s.opt.Paths.ArtifactsDir,
+	total := len(rows)
+	totalPages := max(1, (total+limit-1)/limit)
+	if page > totalPages {
+		page = totalPages
+	}
+	start := (page - 1) * limit
+	end := min(start+limit, total)
+	rows = rows[start:end]
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "artifacts": rows, "store": s.opt.Paths.ArtifactsDir,
+		"total": total, "page": page, "limit": limit,
+		"total_pages": totalPages,
+		"facets": map[string]any{
+			"plugins": sortedArtifactFacet(plugins), "kinds": sortedArtifactFacet(kinds),
+			"channels": sortedArtifactFacet(channels), "statuses": sortedArtifactFacet(statuses),
+		},
 	})
+}
+
+func (s *Server) handleArtifactDetail(w http.ResponseWriter, r *http.Request) {
+	item, err := artifact.NewStore(s.opt.Paths.ArtifactsDir).Get(r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, artifact.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "artifact not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "artifact": handleArtifactSummary(item, true)})
+}
+
+func safeArtifactFilename(item artifact.Artifact) string {
+	name := handleArtifactSummary(item, false).Filename
+	name = filepath.Base(name)
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '@', r == '-', r == '_', r == '.':
+			return r
+		default:
+			return '_'
+		}
+	}, name)
+	if name == "" || name == "." {
+		name = item.ID + ".json"
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".json") {
+		name += ".json"
+	}
+	return name
+}
+
+func artifactPayload(item artifact.Artifact) []byte {
+	if len(item.Payload) == 0 {
+		return []byte("{}\n")
+	}
+	return append(append([]byte(nil), item.Payload...), '\n')
+}
+
+func (s *Server) handleArtifactDownload(w http.ResponseWriter, r *http.Request) {
+	item, err := artifact.NewStore(s.opt.Paths.ArtifactsDir).Get(r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, artifact.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "artifact not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if len(item.Payload) > maxArtifactDownloadBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "artifact payload exceeds download limit"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, safeArtifactFilename(item)))
+	_, _ = w.Write(artifactPayload(item))
+}
+
+func (s *Server) handleArtifactsDownload(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid json"})
+		return
+	}
+	if len(body.IDs) == 0 || len(body.IDs) > maxArtifactBatchItems {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": fmt.Sprintf("ids must contain 1 to %d artifacts", maxArtifactBatchItems)})
+		return
+	}
+	store := artifact.NewStore(s.opt.Paths.ArtifactsDir)
+	all, err := store.List("", "", 0)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	byID := make(map[string]artifact.Artifact, len(all))
+	for _, item := range all {
+		byID[item.ID] = item
+	}
+	items := make([]artifact.Artifact, 0, len(body.IDs))
+	seen := map[string]struct{}{}
+	var totalBytes int64
+	for _, id := range body.IDs {
+		id = strings.TrimSpace(id)
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		item, exists := byID[id]
+		if !exists {
+			writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "artifact not found: " + id})
+			return
+		}
+		if len(item.Payload) > maxArtifactDownloadBytes {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "artifact payload exceeds download limit: " + id})
+			return
+		}
+		totalBytes += int64(len(item.Payload))
+		if totalBytes > maxArtifactBatchBytes {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "selected artifacts exceed batch download limit"})
+			return
+		}
+		items = append(items, item)
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="artifacts.zip"`)
+	archive := zip.NewWriter(w)
+	for _, item := range items {
+		entry, err := archive.Create(item.ID + "-" + safeArtifactFilename(item))
+		if err != nil {
+			continue
+		}
+		_, _ = entry.Write(artifactPayload(item))
+	}
+	_ = archive.Close()
 }
 
 func (s *Server) tavilyPool() *tavilypool.Pool {

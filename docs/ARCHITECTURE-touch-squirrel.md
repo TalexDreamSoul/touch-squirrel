@@ -70,4 +70,4 @@ Local arbitrary packages allowed (`plugin install <dir>`). No signature required
 - `POST /api/tavily/keys/{id}/status`
 
 ### Panel UI tabs
-插件 · 注册流水线 · 囤货 · Tavily 池 · 凭证上传 · 批量导出 · CPA 号池 · 设置
+插件 · 注册流水线 · 产物仓库 · Tavily 池 · 凭证上传 · 批量导出 · CPA 号池 · 设置

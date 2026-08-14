@@ -328,7 +328,9 @@ func ingestArtifact(store *artifact.Store, pluginID string, a Artifact, outputDi
 		return fmt.Errorf("artifact is not valid JSON: %w", err)
 	}
 
-	labels := map[string]string{}
+	labels := map[string]string{
+		"source_file": filepath.Base(artifactPath),
+	}
 	if a.Email != "" {
 		labels["email"] = a.Email
 	}

@@ -53,7 +53,7 @@ const navGroups: NavGroup[] = [
     label: "Host",
     items: [
       { href: "/plugins", label: "插件", icon: PlugsIcon },
-      { href: "/artifacts", label: "囤货", icon: ArchiveIcon },
+      { href: "/artifacts", label: "产物", icon: ArchiveIcon },
     ],
   },
   {

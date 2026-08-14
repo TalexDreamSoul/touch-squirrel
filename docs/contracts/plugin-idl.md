@@ -70,7 +70,7 @@ Host creates and schedules jobs. Plugins execute one unit of work via runner.
 }
 ```
 
-## 4. Artifact (囤货单元)
+## 4. Artifact (产物)
 
 ```json
 {
