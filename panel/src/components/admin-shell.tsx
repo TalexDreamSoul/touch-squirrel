@@ -15,6 +15,7 @@ import {
   NetworkIcon,
   PlayCircleIcon,
   PlugsIcon,
+  PulseIcon,
   SignOutIcon,
   StackIcon,
 } from "@phosphor-icons/react";
@@ -62,6 +63,10 @@ const navGroups: NavGroup[] = [
       { href: "/export", label: "导出", icon: DownloadSimpleIcon },
       { href: "/pool", label: "号池", icon: StackIcon },
     ],
+  },
+  {
+    label: "风控",
+    items: [{ href: "/degrade", label: "降智分析", icon: PulseIcon }],
   },
   {
     label: "联邦",
