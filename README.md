@@ -62,7 +62,7 @@ npx --yes @talex-touch/squirrel@latest web
 需要固定版本时，将 `latest` 替换为具体版本：
 
 ```bash
-npx --yes @talex-touch/squirrel@0.2.3 doctor
+npx --yes @talex-touch/squirrel@0.2.4 doctor
 ```
 
 ### 安装功能插件
@@ -98,6 +98,7 @@ npm update --global @talex-touch/squirrel
 | `SQUIRREL_HOME` | Host 数据、插件与产物目录 | `~/.touch-squirrel` |
 | `SQUIRREL_CACHE_DIR` | npm 启动器的 Host 二进制缓存 | npm 用户缓存目录 |
 | `SQUIRREL_BINARY` | 跳过下载，改用指定的本地 Host | 未设置 |
+| `SQUIRREL_DOWNLOAD_TIMEOUT_MS` | GitHub Release 下载超时（毫秒） | `900000` |
 | `PANEL_ADDR` | Web 管理器监听地址 | `127.0.0.1:8787` |
 | `PANEL_TOKEN` | 为 Web 管理器启用 Token 鉴权 | 未设置 |
 

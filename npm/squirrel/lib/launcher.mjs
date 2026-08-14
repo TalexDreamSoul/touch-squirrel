@@ -21,6 +21,7 @@ const RELEASE_HOSTS = new Set([
   "objects.githubusercontent.com",
   "release-assets.githubusercontent.com",
 ]);
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 
 const TARGETS = new Map([
   ["darwin:arm64", "squirrel-darwin-arm64"],
@@ -67,15 +68,25 @@ export async function packageVersion() {
   return JSON.parse(raw).version;
 }
 
+export function downloadTimeout(env = process.env) {
+  const raw = env.SQUIRREL_DOWNLOAD_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_DOWNLOAD_TIMEOUT_MS;
+  const timeout = Number(raw);
+  if (!Number.isSafeInteger(timeout) || timeout < 1000) {
+    throw new Error("SQUIRREL_DOWNLOAD_TIMEOUT_MS must be an integer of at least 1000");
+  }
+  return timeout;
+}
+
 function releaseURL(version, filename) {
   return `https://github.com/${REPOSITORY}/releases/download/v${version}/${filename}`;
 }
 
-async function fetchRelease(url, label) {
+async function fetchRelease(url, label, timeoutMs) {
   const response = await fetch(url, {
     redirect: "follow",
     headers: { "user-agent": "@talex-touch/squirrel" },
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok || !response.body) {
     throw new Error(`${label} download failed: ${response.status} ${response.statusText}`);
@@ -87,13 +98,13 @@ async function fetchRelease(url, label) {
   return response;
 }
 
-async function downloadText(url, label) {
-  const response = await fetchRelease(url, label);
+async function downloadText(url, label, timeoutMs) {
+  const response = await fetchRelease(url, label, timeoutMs);
   return response.text();
 }
 
-async function downloadFile(url, destination, label) {
-  const response = await fetchRelease(url, label);
+async function downloadFile(url, destination, label, timeoutMs) {
+  const response = await fetchRelease(url, label, timeoutMs);
   await pipeline(Readable.fromWeb(response.body), createWriteStream(destination, { mode: 0o600 }));
 }
 
@@ -129,13 +140,18 @@ export async function ensureBinary(options = {}) {
   if (await cachedBinaryIsValid(binary, checksumFile, asset)) return binary;
 
   console.error(`[squirrel] downloading v${version} for ${options.platform || process.platform}/${options.arch || process.arch}`);
-  const checksumsText = await downloadText(releaseURL(version, "checksums.txt"), "checksums");
+  const timeoutMs = downloadTimeout(env);
+  const checksumsText = await downloadText(
+    releaseURL(version, "checksums.txt"),
+    "checksums",
+    timeoutMs,
+  );
   const expected = parseChecksums(checksumsText).get(asset);
   if (!expected) throw new Error(`release v${version} does not contain a checksum for ${asset}`);
 
   const temporary = `${binary}.tmp-${process.pid}-${Date.now()}`;
   try {
-    await downloadFile(releaseURL(version, asset), temporary, asset);
+    await downloadFile(releaseURL(version, asset), temporary, asset, timeoutMs);
     const actual = await sha256(temporary);
     if (actual !== expected) {
       throw new Error(`checksum mismatch for ${asset}: expected ${expected}, received ${actual}`);

@@ -25,7 +25,7 @@ Open <http://127.0.0.1:8787>. Running without a subcommand is equivalent to `web
 npx --yes @talex-touch/squirrel@latest web
 ```
 
-To reproduce this release, replace `latest` with `0.2.3`.
+To reproduce this release, replace `latest` with `0.2.4`.
 
 ## Install Plugins
 
@@ -71,6 +71,7 @@ verified binary instead of downloading it again.
 | `SQUIRREL_CACHE_DIR` | Override the launcher binary cache | npm user cache |
 | `SQUIRREL_HOME` | Override Host data, plugins, and artifacts | `~/.touch-squirrel` |
 | `SQUIRREL_OFFICIAL_PLUGIN_REPO` | Override the official plugin repository | Official GitHub repo |
+| `SQUIRREL_DOWNLOAD_TIMEOUT_MS` | Override the GitHub Release timeout in milliseconds | `900000` |
 | `PANEL_ADDR` | Override the web manager bind address | `127.0.0.1:8787` |
 | `PANEL_TOKEN` | Enable web manager token authentication | Unset |
 
