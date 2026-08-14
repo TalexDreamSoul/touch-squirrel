@@ -31,12 +31,12 @@ Host 与插件只通过本契约通信。语言（Go / JS）是实现细节。
 
 | field | required | notes |
 |-------|----------|-------|
-| `id` | yes | kebab-case, unique |
-| `version` | yes | semver |
+| `id` | yes | letters, numbers, dot, underscore, or hyphen; unique |
+| `version` | yes | semver-compatible filesystem-safe value |
 | `kind` | yes | `registrar` \| `pool-proxy` \| `exporter` \| `capability` |
-| `runtime` | yes | `go` \| `js` \| `hybrid` |
-| `entry` | yes | at least one of `go` / `js` |
-| `hostApi` | yes | host contract major.minor |
+| `runtime` | yes | `go` \| `js` \| `hybrid` \| `bridge` |
+| `entry` | yes | at least one of `go` / `js` / `bridge`; relative path inside the plugin directory |
+| `hostApi` | yes | must match the host contract version |
 | `capabilities` | no | declared host capabilities |
 | `artifactKinds` | no | produced artifact kinds |
 | `configSchema` | no | JSON Schema for plugin config |
@@ -132,11 +132,12 @@ Host creates and schedules jobs. Plugins execute one unit of work via runner.
 }
 ```
 
-## 8. Local trust (v0)
+## 8. Trust model (v0)
 
-- 允许安装任意本地 path / tgz / url。
-- 不强制签名。
-- enable 时可展示 capabilities（可一键确认）。
+- Local path installs are explicitly trusted by the local operator.
+- GitHub market sources only accept `https://github.com/{owner}/{repo}`. The host builds the codeload URL and rejects unsafe archive paths, links, oversized archives, duplicate plugin IDs, invalid manifests, and incompatible `hostApi` values.
+- Repository provenance is host-owned metadata. A plugin cannot mark itself as official in `plugin.json`; only the immutable official repository receives that flag.
+- Plugins remain executable third-party code. v0 does not provide signatures or a runtime sandbox, so repository trust is still required.
 
 ## 9. First-party plugins
 

@@ -73,6 +73,27 @@ squirrel panel     # Web 控制台 :8787
   - **号池 / 巡检**：健康/限流/死号统计、额度估算、定时巡检（轻检/深检）、巡检历史
   - **自动补号**：健康号低于阈值时自动启动注册（冷却期 + 单日上限 + 运行中三重守卫）
 
+### GitHub 插件市场
+
+面板入口：`Host → 插件`；仓库配置位于 `系统 → 设置 → 插件源`。
+
+- 官方源始终存在，面板内不可修改或删除；部署时可用 `SQUIRREL_OFFICIAL_PLUGIN_REPO` 指向新的官方 GitHub 仓库。
+- 镜像源只接受 `https://github.com/{owner}/{repo}`。仓库可包含一个或多个插件目录，每个目录以 `plugin.json` 为入口，不需要额外索引文件。
+- 同步会把 GitHub `HEAD` 快照下载到本机 `market-cache`，完整校验后再替换旧缓存；安装后的插件会记录仓库来源和官方标记。
+- 插件属于可执行代码。只添加你信任的仓库，并在更新前检查其内容。
+
+插件仓库最小结构：
+
+```text
+my-plugins/
+└── plugins/
+    └── example-plugin/
+        ├── plugin.json
+        └── runner.py
+```
+
+`plugin.json` 契约见 [`docs/contracts/plugin-idl.md`](docs/contracts/plugin-idl.md)。
+
 ### 隔离网络泄露巡检
 
 面板入口：`安全 → 泄露巡检`。

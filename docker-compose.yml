@@ -90,6 +90,7 @@ services:
       GROK_HOME: /data
       PANEL_ADDR: ":8787"
       PANEL_TOKEN: ${PANEL_TOKEN:-local-dev-token}
+      SQUIRREL_OFFICIAL_PLUGIN_REPO: ${SQUIRREL_OFFICIAL_PLUGIN_REPO:-https://github.com/TalexDreamSoul/touch-xai-register}
       # Passive discovery credentials intentionally remain deploy-time secrets.
       FOFA_EMAIL: ${FOFA_EMAIL:-}
       FOFA_API_KEY: ${FOFA_API_KEY:-}

@@ -69,6 +69,7 @@ export type Health = {
 export type RunStatus = {
   status?: string;
   run_id?: string;
+  plugin?: string;
   target?: number;
   done?: number;
   success?: number;
@@ -161,6 +162,39 @@ export type PluginInfo = {
   capabilities?: string[];
   artifact_kinds?: string[];
   status?: string;
+  repository_id?: string;
+  repository_name?: string;
+  repository_url?: string;
+  official?: boolean;
+};
+
+export type PluginRepository = {
+  id: string;
+  name: string;
+  url: string;
+  official: boolean;
+  synced_at?: string;
+  plugin_count: number;
+  last_error?: string;
+};
+
+export type MarketPlugin = {
+  manifest: {
+    id: string;
+    name: string;
+    version: string;
+    description?: string;
+    kind?: string[];
+    runtime: string;
+    capabilities?: string[];
+    artifactKinds?: string[];
+    status?: string;
+  };
+  repository_id: string;
+  repository_name: string;
+  official: boolean;
+  installed: boolean;
+  installed_version?: string;
 };
 
 export type ArtifactInfo = {
