@@ -14,8 +14,8 @@
 ## 快速启动
 
 ```bash
-git clone https://github.com/TalexDreamSoul/touch-xai-register.git
-cd touch-xai-register
+git clone https://github.com/TalexDreamSoul/touch-squirrel.git
+cd touch-squirrel
 
 cp .env.example .env
 # 务必改掉 PANEL_TOKEN

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/grok-free-register/grok-reg/internal/home"
@@ -27,16 +26,7 @@ func IsWorker() bool {
 }
 
 func PIDAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// Signal 0 checks existence without killing.
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil
+	return pidAlive(pid)
 }
 
 func ReadPID(path string) (int, error) {
@@ -67,19 +57,7 @@ func TryLock(lockPath string) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("注册机已经在运行（无法获取锁）")
-	}
-	unlock := func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
-	}
-	return unlock, nil
+	return lockFile(lockPath)
 }
 
 // StartBackground re-execs self with --worker and returns child PID.
@@ -97,8 +75,7 @@ func StartBackground(target int, runID string) (int, error) {
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 	cmd.Env = os.Environ()
-	// Detach from controlling terminal.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	configureBackground(cmd)
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
@@ -132,8 +109,8 @@ func Stop(paths home.Paths) error {
 	if err != nil {
 		return err
 	}
-	// Graceful first.
-	_ = proc.Signal(syscall.SIGTERM)
+	// Graceful first where the platform supports it.
+	_ = terminateProcess(proc)
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		if !PIDAlive(pid) {
@@ -142,7 +119,7 @@ func Stop(paths home.Paths) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	_ = proc.Signal(syscall.SIGKILL)
+	_ = killProcess(proc)
 	time.Sleep(300 * time.Millisecond)
 	ClearPID(paths.PID)
 	return nil

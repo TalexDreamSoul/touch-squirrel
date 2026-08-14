@@ -1,0 +1,114 @@
+name: Release Squirrel
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: go test ./...
+      - run: npm test --prefix npm/squirrel
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+            asset: squirrel-darwin-arm64
+          - goos: darwin
+            goarch: amd64
+            asset: squirrel-darwin-amd64
+          - goos: linux
+            goarch: arm64
+            asset: squirrel-linux-arm64
+          - goos: linux
+            goarch: amd64
+            asset: squirrel-linux-amd64
+          - goos: windows
+            goarch: amd64
+            asset: squirrel-windows-amd64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build host
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          ASSET: ${{ matrix.asset }}
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          mkdir -p dist
+          VERSION="${TAG#v}"
+          COMMIT_TIME="$(git show -s --format=%cI "$COMMIT")"
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.commitTime=$COMMIT_TIME -X main.repository=https://github.com/TalexDreamSoul/touch-squirrel" \
+            -o "dist/$ASSET" ./cmd/grok
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum squirrel-* > checksums.txt
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --generate-notes --verify-tag
+
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - name: Align npm version with tag
+        working-directory: npm/squirrel
+        env:
+          TAG: ${{ github.ref_name }}
+        run: npm version "${TAG#v}" --no-git-tag-version
+      - name: Publish launcher
+        working-directory: npm/squirrel
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance

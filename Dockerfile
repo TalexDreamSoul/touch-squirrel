@@ -4,7 +4,7 @@ FROM golang:1.24-bookworm AS build
 ARG SQUIRREL_VERSION=0.2.0-panel
 ARG SQUIRREL_COMMIT=unknown
 ARG SQUIRREL_COMMIT_TIME
-ARG SQUIRREL_REPOSITORY=https://github.com/TalexDreamSoul/touch-xai-register
+ARG SQUIRREL_REPOSITORY=https://github.com/TalexDreamSoul/touch-squirrel
 ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY go.mod go.sum ./

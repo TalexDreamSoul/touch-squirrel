@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""github-registrar bridge runner for touch-xai-register host.
+"""github-registrar bridge runner for touch-squirrel host.
 
 Called by the Go host via os/exec. Reads one JSON line from stdin containing
 job config, emits NDJSON events on stdout, writes artifacts to outputDir.

@@ -3,11 +3,11 @@ MODULE=github.com/grok-free-register/grok-reg
 VERSION?=0.2.0-panel
 COMMIT?=$(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 COMMIT_TIME?=$(shell git show -s --format=%cI HEAD 2>/dev/null || true)
-REPOSITORY?=https://github.com/TalexDreamSoul/touch-xai-register
+REPOSITORY?=https://github.com/TalexDreamSoul/touch-squirrel
 PREFIX?=/usr/local
 BINDIR=$(PREFIX)/bin
 
-.PHONY: help build install uninstall clean test run panel panel-ui up down status docker-up docker-down docker-rebuild
+.PHONY: help build install uninstall clean test npm-test npm-pack release-check run panel panel-ui up down status docker-up docker-down docker-rebuild
 
 # Resolve go even when sudo drops PATH (mise /usr/local / home installs).
 GO ?= $(shell command -v go 2>/dev/null || true)
@@ -22,7 +22,7 @@ ifeq ($(GO),)
 endif
 
 help:
-	@echo "touch-xai-register / squirrel (touch-squirrel host)"
+	@echo "touch-squirrel / squirrel host"
 	@echo ""
 	@echo "本机最快启动:"
 	@echo "  make up              # clearance(Docker) + 宿主 panel，或复用已在跑的全家桶"
@@ -35,6 +35,8 @@ help:
 	@echo "  make build           # panel-ui + 编译 bin/squirrel"
 	@echo "  make panel           # 前台跑 panel（:8787）"
 	@echo "  make test            # go test ./..."
+	@echo "  make npm-test        # npm 启动器测试"
+	@echo "  make release-check   # Go + npm + npm pack 发布前检查"
 	@echo ""
 	@echo "Docker 全家桶:"
 	@echo "  make docker-up       # compose up -d --build"
@@ -129,6 +131,14 @@ clean:
 test:
 	@if [ -z "$(GO)" ] || [ ! -x "$(GO)" ]; then echo "go not found"; exit 1; fi
 	$(GO) test ./...
+
+npm-test:
+	cd npm/squirrel && npm test
+
+npm-pack:
+	cd npm/squirrel && npm pack --dry-run
+
+release-check: test npm-test npm-pack
 
 run:
 	@if [ -z "$(GO)" ] || [ ! -x "$(GO)" ]; then echo "go not found"; exit 1; fi

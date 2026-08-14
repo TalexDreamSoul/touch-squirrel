@@ -23,7 +23,7 @@ import (
 
 const (
 	OfficialRepositoryID         = "official"
-	DefaultOfficialRepositoryURL = "https://github.com/TalexDreamSoul/touch-xai-register"
+	DefaultOfficialRepositoryURL = "https://github.com/TalexDreamSoul/touch-squirrel"
 	officialRepositoryEnv        = "SQUIRREL_OFFICIAL_PLUGIN_REPO"
 	maxArchiveBytes              = int64(100 << 20)
 	maxExtractedBytes            = uint64(500 << 20)
@@ -542,6 +542,11 @@ func customRepositories(repositories []Repository) []Repository {
 		}
 	}
 	return custom
+}
+
+// CurrentOfficialRepositoryURL returns the normalized official plugin source.
+func CurrentOfficialRepositoryURL() (string, error) {
+	return currentOfficialRepositoryURL()
 }
 
 func currentOfficialRepositoryURL() (string, error) {

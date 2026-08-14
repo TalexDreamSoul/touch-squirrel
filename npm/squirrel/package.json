@@ -1,0 +1,40 @@
+{
+  "name": "@talex-touch/squirrel",
+  "version": "0.2.0",
+  "description": "Lightweight launcher for the Touch Squirrel local web manager",
+  "type": "module",
+  "bin": {
+    "squirrel": "bin/squirrel.mjs"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "prepublishOnly": "npm test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TalexDreamSoul/touch-squirrel.git",
+    "directory": "npm/squirrel"
+  },
+  "homepage": "https://github.com/TalexDreamSoul/touch-squirrel",
+  "bugs": {
+    "url": "https://github.com/TalexDreamSoul/touch-squirrel/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "keywords": [
+    "squirrel",
+    "plugin-manager",
+    "local-web",
+    "credential-pool"
+  ]
+}

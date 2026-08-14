@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 )
 
+const disableInTreePluginsEnv = "SQUIRREL_DISABLE_IN_TREE_PLUGINS"
+
 // ResolveInTreeRoot finds the repo plugins/ directory when developing or running
 // from a checkout. Empty string means "no in-tree pack".
 //
@@ -14,6 +16,10 @@ import (
 //  3. walk parents of cwd for plugins/<id>/plugin.json
 //  4. relative to executable (bin/../plugins, bin/../../plugins)
 func ResolveInTreeRoot() string {
+	switch os.Getenv(disableInTreePluginsEnv) {
+	case "1", "true", "TRUE", "yes", "YES":
+		return ""
+	}
 	if v := os.Getenv("SQUIRREL_PLUGINS"); v != "" {
 		if st, err := os.Stat(v); err == nil && st.IsDir() {
 			return v

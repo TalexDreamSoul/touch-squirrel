@@ -1,16 +1,16 @@
-# reg-factory 融入 touch-xai-register 架构方案
+# reg-factory 融入 touch-squirrel 架构方案
 
 > 日期：2026-07-27 · 版本：v0.1 · 状态：方案评审
 
 ## 1. 目标
 
-将 [tiantianGPU/reg-factory](https://github.com/tiantianGPU/reg-factory) 的平台注册能力融入 touch-xai-register 插件体系，使 Host 统一调度多平台注册流水线，产物统一进入 artifact store → acctpool → CPA/上传。
+将 [tiantianGPU/reg-factory](https://github.com/tiantianGPU/reg-factory) 的平台注册能力融入 touch-squirrel 插件体系，使 Host 统一调度多平台注册流水线，产物统一进入 artifact store → acctpool → CPA/上传。
 
 首批平台：**GitHub 注册**（`register_github.py`）。
 
 ## 2. 现状对照
 
-### touch-xai-register 侧
+### touch-squirrel 侧
 
 | 能力 | 当前状态 |
 |------|---------|
@@ -210,7 +210,7 @@ default:
 
 ```python
 #!/usr/bin/env python3
-"""github-registrar bridge runner for touch-xai-register host."""
+"""github-registrar bridge runner for touch-squirrel host."""
 
 import json
 import os

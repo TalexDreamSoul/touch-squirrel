@@ -18,6 +18,13 @@ const testMarketManifest = `{
   "hostApi": "0.1"
 }`
 
+func TestDefaultOfficialRepositoryURL(t *testing.T) {
+	const want = "https://github.com/TalexDreamSoul/touch-squirrel"
+	if DefaultOfficialRepositoryURL != want {
+		t.Fatalf("DefaultOfficialRepositoryURL=%q, want %q", DefaultOfficialRepositoryURL, want)
+	}
+}
+
 func TestMarketRepositoriesKeepOfficialSource(t *testing.T) {
 	t.Setenv(officialRepositoryEnv, DefaultOfficialRepositoryURL)
 	root := t.TempDir()

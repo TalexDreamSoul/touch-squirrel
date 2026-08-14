@@ -32,7 +32,7 @@ var (
 	version    = "0.1.0"
 	commit     = ""
 	commitTime = ""
-	repository = "https://github.com/TalexDreamSoul/touch-xai-register"
+	repository = "https://github.com/TalexDreamSoul/touch-squirrel"
 )
 
 func currentBuildInfo() api.BuildInfo {
@@ -77,8 +77,11 @@ func main() {
 		return
 	}
 	if len(args) == 0 {
-		printHelp()
-		os.Exit(0)
+		if err := cmdPanel(nil); err != nil {
+			fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 	cmd := args[0]
 	switch cmd {
@@ -132,6 +135,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "错误: %v\n", err)
 			os.Exit(1)
 		}
+	case "doctor":
+		if err := cmdDoctor(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+			os.Exit(1)
+		}
 	case "help", "-h", "--help":
 		printHelp()
 	case "version", "-v", "--version":
@@ -154,38 +162,42 @@ func appName() string {
 
 func printHelp() {
 	name := appName()
-	fmt.Printf(`%s — touch-squirrel 囤囤鼠运行时（插件化注册 / 号池）
+	fmt.Printf(`%[1]s — touch-squirrel 囤囤鼠运行时（插件化注册 / 号池）
 
 用法:
-  %s plugin list              列出已发现插件（in-tree + 已安装）
-  %s plugin show <id>         查看插件清单
-  %s plugin install <dir>     安装本地插件目录（任意本地包）
-  %s plugin enable <id>       启用插件
-  %s plugin disable <id>      禁用插件
-  %s run <id> [-t N]          运行 registrar 插件（xai-accounts 走现网流水线）
-  %s start [-t N]             兼容：等同 run xai-accounts
-  %s pool keys list|add       tavily-pool 密钥管理
-  %s pool serve [--addr]      启动 tavily-pool HTTP/MCP 代理
-  %s artifacts list           列出统一插件产物
-  %s status                   查看运行状态与进度
-  %s stop                     立即停止注册机
-  %s logs [-f]                查看最近一次运行日志；-f 实时跟踪
-  %s upload                   选择最近 run 的 CPA JSON 上传到 Management API
-  %s panel                    启动 Web 控制面板 (默认 :8787)
-  %s help                     显示帮助
+  %[1]s                         启动 Web 管理器（默认 127.0.0.1:8787）
+  %[1]s web                     显式启动 Web 管理器
+  %[1]s doctor [--json]         检查 Host、端口、存储与官方插件源
+  %[1]s plugin list             列出已发现插件（源码 + 已安装）
+  %[1]s plugin show <id>        查看插件清单
+  %[1]s plugin install <dir>    安装本地插件目录
+  %[1]s plugin enable <id>      启用插件
+  %[1]s plugin disable <id>     禁用插件
+  %[1]s run <id> [-t N]         运行 registrar 插件
+  %[1]s start [-t N]            兼容：等同 run xai-accounts
+  %[1]s pool keys list|add      tavily-pool 密钥管理
+  %[1]s pool serve [--addr]     启动 tavily-pool HTTP/MCP 代理
+  %[1]s artifacts list          列出统一插件产物
+  %[1]s status                  查看运行状态与进度
+  %[1]s stop                    立即停止注册机
+  %[1]s logs [-f]               查看最近运行日志；-f 实时跟踪
+  %[1]s upload                  上传 CPA JSON 到 Management API
+  %[1]s help                    显示帮助
 
 环境变量:
-  SQUIRREL_HOME       数据目录（默认 ~/.touch-squirrel；若仅有 ~/.grok 则沿用）
-  GROK_HOME           兼容旧变量（次优先）
-  SQUIRREL_PLUGINS    in-tree plugins 目录覆盖
-  PANEL_ADDR          面板监听地址（默认 :8787）
-  PANEL_TOKEN         面板鉴权 token（建议生产环境设置）
+  SQUIRREL_HOME                    数据目录（默认 ~/.touch-squirrel）
+  GROK_HOME                        兼容旧数据目录变量
+  SQUIRREL_PLUGINS                 源码插件目录覆盖
+  SQUIRREL_DISABLE_IN_TREE_PLUGINS 禁用源码插件发现（npm 启动器默认开启）
+  SQUIRREL_OFFICIAL_PLUGIN_REPO    官方 GitHub 插件源覆盖
+  PANEL_ADDR                       管理器监听地址（默认 127.0.0.1:8787）
+  PANEL_TOKEN                      管理器鉴权 token
 
-数据目录: ~/.touch-squirrel/ （可用 SQUIRREL_HOME / GROK_HOME 覆盖）
-插件目录: $HOME/plugins/<id>/<version>/
-输出:     $HOME/outputs/<yyyymmdd-HHMMSS>/{SSO,CPA}/
+数据目录: ~/.touch-squirrel/
+插件目录: ~/.touch-squirrel/plugins/<id>/<version>/
+输出目录: ~/.touch-squirrel/outputs/<run-id>/{SSO,CPA}/
 契约:     docs/contracts/plugin-idl.md
-`, name, name, name, name, name, name, name, name, name, name, name, name, name, name, name, name, name)
+`, name)
 }
 
 func paths() (home.Paths, error) {
@@ -206,7 +218,7 @@ func pluginManager(p home.Paths) *plugin.Manager {
 func cmdPanel(args []string) error {
 	addr := os.Getenv("PANEL_ADDR")
 	if addr == "" {
-		addr = ":8787"
+		addr = "127.0.0.1:8787"
 	}
 	token := os.Getenv("PANEL_TOKEN")
 	for i := 0; i < len(args); i++ {

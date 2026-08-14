@@ -15,7 +15,8 @@
 | 产品品牌 | 松果仓 | 面板、README、公开文档与视觉传播 |
 | Runtime | `touch-squirrel` | 架构、包和系统语境 |
 | CLI | `squirrel` | 命令行与二进制名称 |
-| 仓库 | `touch-xai-register` | 历史仓库名，逐步弱化但不影响兼容 |
+| 仓库 | `touch-squirrel` | 官方 Host 与插件仓库 |
+| 旧仓库 | `touch-xai-register` | 历史名称，仅保留兼容说明 |
 
 公开界面优先写“松果仓”。只有讨论实现、兼容或命令时才使用英文 Runtime 和仓库名。
 

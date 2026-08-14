@@ -33,19 +33,40 @@
 | 联邦调度 | Master / Slave 心跳、缺口分配、多主选择、公开状态页与模型探活 |
 | 运维与安全 | 通知渠道、插件市场、配置迁移、隔离网络资产巡检与人工审批披露 |
 
-## 5 分钟启动
+## 立即使用
 
-### 本机工作台
+需要 Node.js 20+。无需克隆仓库或预装 Go：
+
+```bash
+npx @talex-touch/squirrel
+```
+
+无参数命令会准备并启动本地 Web 管理器，默认地址为 <http://127.0.0.1:8787>。首次运行会从 GitHub Release 下载当前平台的 Go Host，校验 SHA-256 后缓存；不会预装任何功能插件。
+
+```bash
+npx @talex-touch/squirrel doctor   # 启动前诊断
+npx @talex-touch/squirrel web      # 显式启动管理器
+```
+
+进入「插件 → 插件市场」，同步 `TalexDreamSoul/touch-squirrel` 官方源，再安装需要的注册器、号池或 Bridge。插件保存在 `~/.touch-squirrel/plugins/`，与 npm 启动包和 Host 二进制独立更新。
+
+全局安装后可以直接使用 `squirrel`：
+
+```bash
+npm install --global @talex-touch/squirrel
+squirrel
+squirrel doctor
+```
+
+### 从源码开发
 
 需要 Docker/OrbStack 和 Go 1.26.5；首次构建会自动安装 `panel/` 依赖。
 
 ```bash
-git clone https://github.com/TalexDreamSoul/touch-xai-register.git
-cd touch-xai-register
+git clone https://github.com/TalexDreamSoul/touch-squirrel.git
+cd touch-squirrel
 make up
 ```
-
-打开 <http://127.0.0.1:8787>。`make up` 会复用已有面板，或启动 clearance 后在宿主机运行 `squirrel panel`。
 
 ```bash
 make status
@@ -149,6 +170,9 @@ flowchart LR
 ## 常用命令
 
 ```bash
+squirrel                         # 启动 Web 管理器
+squirrel web                    # 显式启动
+squirrel doctor                 # 环境诊断
 squirrel plugin list
 squirrel run xai-accounts -t 10
 squirrel start -t 10            # 兼容入口
@@ -157,7 +181,6 @@ squirrel logs -f
 squirrel stop
 squirrel upload
 squirrel artifacts list
-squirrel panel
 ```
 
 | 开发命令 | 用途 |
@@ -208,6 +231,7 @@ squirrel panel
 - [插件系统](docs/manual/chapters/08-plugins.md)
 - [存储与凭证](docs/manual/chapters/09-storage.md)
 - [故障排查](docs/manual/chapters/10-troubleshooting.md)
+- [发布 npm 与 Host](docs/RELEASING.md)
 - [品牌 IP 规范](design/brand/README.md)
 
 ## 安全边界
