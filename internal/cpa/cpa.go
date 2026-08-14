@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,50 +105,120 @@ func WriteAtomic(dir string, doc Document, secret []byte) (string, error) {
 	return path, nil
 }
 
+// ProbeOptions tunes one probe request. The zero value reproduces the legacy
+// health probe (grok-4.5, 16 output tokens, "ok").
+type ProbeOptions struct {
+	Model           string
+	Prompt          string
+	MaxOutputTokens int
+}
+
+func (o ProbeOptions) withDefaults() ProbeOptions {
+	if strings.TrimSpace(o.Model) == "" {
+		o.Model = "grok-4.5"
+	}
+	if o.Prompt == "" {
+		o.Prompt = "ok"
+	}
+	if o.MaxOutputTokens <= 0 {
+		o.MaxOutputTokens = 16
+	}
+	return o
+}
+
+// ProbeResult records what a probe observed beyond alive/dead. HasReasoning is
+// the degradation signal: a downgraded (风控降智) account answers with no chain
+// of thought at all, so reasoning tokens drop to zero.
+type ProbeResult struct {
+	Model           string `json:"model"`
+	Status          int    `json:"status"`
+	HasReasoning    bool   `json:"has_reasoning"`
+	ReasoningTokens int    `json:"reasoning_tokens"`
+	OutputText      string `json:"output_text,omitempty"`
+	DurationMS      int64  `json:"duration_ms"`
+}
+
+// httpClientFor builds a probe client bound to proxy. An unusable proxy is an
+// error rather than a silent direct-connection fallback: leaking probes onto
+// the host IP is exactly what trips xAI's per-IP account counter.
+func httpClientFor(proxy string, timeout time.Duration) (*http.Client, error) {
+	proxy = strings.TrimSpace(proxy)
+	if proxy == "" {
+		return &http.Client{Timeout: timeout}, nil
+	}
+	u, err := url.Parse(proxy)
+	if err != nil {
+		return nil, fmt.Errorf("proxy 解析失败: %v", err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("proxy 无效: %s", proxy)
+	}
+	tr, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, fmt.Errorf("proxy 不可用: 默认 transport 类型异常")
+	}
+	tr = tr.Clone()
+	tr.Proxy = http.ProxyURL(u)
+	return &http.Client{Timeout: timeout, Transport: tr}, nil
+}
+
 // Probe hits cli-chat-proxy with minimal responses call (acpa_watchdog shape).
 // New tokens often get transient 403 permission-denied; warmup + short retries.
 // Returns nil if alive.
 func Probe(doc Document, proxy string) error {
-	_ = proxy
+	_, err := ProbeDetail(doc, proxy, ProbeOptions{})
+	return err
+}
+
+// ProbeDetail is Probe with the observed response detail returned. The result
+// is populated whenever a response came back, including on error.
+func ProbeDetail(doc Document, proxy string, opt ProbeOptions) (ProbeResult, error) {
+	opt = opt.withDefaults()
+	client, err := httpClientFor(proxy, 45*time.Second)
+	if err != nil {
+		return ProbeResult{Model: opt.Model}, err
+	}
 	// Warmup: mint-then-immediate chat often 403s.
 	time.Sleep(3 * time.Second)
 
 	var last error
+	var lastRes ProbeResult
 	// Immediate 403 retries (default 2 sleeps of 4s like ACPA_403_IMMEDIATE_*)
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(4 * time.Second)
 		}
-		err := probeOnce(doc)
+		res, err := probeOnce(client, doc, opt)
 		if err == nil {
-			return nil
+			return res, nil
 		}
-		last = err
+		last, lastRes = err, res
 		msg := err.Error()
 		// transient permission-denied — retry
 		if strings.Contains(msg, "permission-denied") || strings.Contains(msg, "chat endpoint is denied") || strings.Contains(msg, "http=403") {
 			continue
 		}
 		// non-retryable
-		return err
+		return res, err
 	}
-	return last
+	return lastRes, last
 }
 
-func probeOnce(doc Document) error {
-	client := &http.Client{Timeout: 45 * time.Second}
+func probeOnce(client *http.Client, doc Document, opt ProbeOptions) (ProbeResult, error) {
+	res := ProbeResult{Model: opt.Model}
+	started := time.Now()
 	// Match keys/acpa_watchdog.py body exactly — bare content string can 403.
 	payload := map[string]any{
-		"model":             "grok-4.5",
+		"model":             opt.Model,
 		"store":             false,
 		"stream":            false,
-		"max_output_tokens": 16,
+		"max_output_tokens": opt.MaxOutputTokens,
 		"input": []map[string]any{
 			{
 				"type": "message",
 				"role": "user",
 				"content": []map[string]any{
-					{"type": "input_text", "text": "ok"},
+					{"type": "input_text", "text": opt.Prompt},
 				},
 			},
 		},
@@ -163,7 +234,7 @@ func probeOnce(doc Document) error {
 	}
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
-		return err
+		return res, err
 	}
 	sid := "probe-" + doc.Sub
 	if doc.Sub == "" {
@@ -184,7 +255,7 @@ func probeOnce(doc Document) error {
 	if len(rid) >= 8 {
 		req.Header.Set("x-grok-agent-id", "agent-"+rid[:8])
 	}
-	req.Header.Set("x-grok-model-override", "grok-4.5")
+	req.Header.Set("x-grok-model-override", opt.Model)
 	if doc.Email != "" {
 		req.Header.Set("x-email", doc.Email)
 	}
@@ -193,21 +264,80 @@ func probeOnce(doc Document) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		res.DurationMS = time.Since(started).Milliseconds()
+		return res, err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	res.DurationMS = time.Since(started).Milliseconds()
+	res.Status = resp.StatusCode
 	txt := string(body)
 	low := strings.ToLower(txt)
 	if resp.StatusCode == 200 {
-		return nil
+		fillReasoning(&res, body)
+		return res, nil
 	}
 	// free exhausted / rate limit: still treat as "alive enough" for CPA count?
 	// Match watchdog: only 200 is alive; return error with marker.
 	if resp.StatusCode == 429 || strings.Contains(low, "free-usage-exhausted") || strings.Contains(low, "rate limit") {
-		return fmt.Errorf("probe http=%d rate/exhausted body=%s", resp.StatusCode, truncate(txt, 120))
+		return res, fmt.Errorf("probe http=%d rate/exhausted body=%s", resp.StatusCode, truncate(txt, 120))
 	}
-	return fmt.Errorf("probe http=%d body=%s", resp.StatusCode, truncate(txt, 160))
+	return res, fmt.Errorf("probe http=%d body=%s", resp.StatusCode, truncate(txt, 160))
+}
+
+// responsesEnvelope is the slice of the /responses payload the probe reads.
+type responsesEnvelope struct {
+	Output []struct {
+		Type    string `json:"type"`
+		Summary []struct {
+			Text string `json:"text"`
+		} `json:"summary"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"output"`
+	Usage struct {
+		OutputTokensDetails struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"output_tokens_details"`
+	} `json:"usage"`
+}
+
+// fillReasoning extracts the chain-of-thought signal and the answer text.
+// Reasoning is reported two ways depending on the upstream build — token
+// accounting in usage, or explicit reasoning items in output — so both count.
+func fillReasoning(res *ProbeResult, body []byte) {
+	var env responsesEnvelope
+	if json.Unmarshal(body, &env) != nil {
+		return
+	}
+	res.ReasoningTokens = env.Usage.OutputTokensDetails.ReasoningTokens
+	if res.ReasoningTokens > 0 {
+		res.HasReasoning = true
+	}
+	var answer strings.Builder
+	for _, item := range env.Output {
+		if item.Type == "reasoning" {
+			for _, s := range item.Summary {
+				if strings.TrimSpace(s.Text) != "" {
+					res.HasReasoning = true
+				}
+			}
+			for _, c := range item.Content {
+				if strings.TrimSpace(c.Text) != "" {
+					res.HasReasoning = true
+				}
+			}
+			continue
+		}
+		for _, c := range item.Content {
+			if c.Text != "" {
+				answer.WriteString(c.Text)
+			}
+		}
+	}
+	res.OutputText = truncate(strings.TrimSpace(answer.String()), 200)
 }
 
 func AppendSSO(accountsPath, email, password, sso string) error {

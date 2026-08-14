@@ -16,6 +16,7 @@ import (
 
 	"github.com/grok-free-register/grok-reg/internal/artifact"
 	"github.com/grok-free-register/grok-reg/internal/jobs"
+	"github.com/grok-free-register/grok-reg/internal/runmetrics"
 )
 
 // Config bundles the runtime parameters for one bridge execution.
@@ -29,6 +30,7 @@ type Config struct {
 	OutputDir   string
 	ArtifactDir string // root for artifact store
 	LogPath     string // optional: tee job logs to this run log file
+	Metrics     *runmetrics.Collector
 }
 
 // RunnerResult is the terminal outcome.
@@ -204,6 +206,17 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 				if p.Done > 0 && p.Done <= len(items) {
 					job.MutateItem(p.Done-1, func(it *jobs.Item) { it.Status = jobs.ItemSuccess })
 				}
+				if cfg.Metrics != nil && p.DurationMS > 0 && p.Email != "" {
+					stages := make([]runmetrics.Stage, 0, len(p.Stages))
+					for _, stage := range p.Stages {
+						stages = append(stages, runmetrics.Stage{Name: stage.Name, DurationMS: stage.DurationMS, Status: stage.Status, Error: stage.Error})
+					}
+					status := p.Status
+					if status == "" {
+						status = "completed"
+					}
+					cfg.Metrics.RecordReportedAccount(p.Email, p.DurationMS, status, stages, p.Error)
+				}
 			} else {
 				logf("bridge: bad progress: %s", line)
 			}
@@ -279,6 +292,9 @@ func Run(ctx context.Context, mgr *jobs.Manager, cfg Config) (RunnerResult, erro
 		} else {
 			exitCode = -1
 		}
+	}
+	if waitErr != nil && result.Error == nil {
+		result.Error = waitErr
 	}
 
 	logf("bridge: process exited code=%d ok=%d fail=%d", exitCode, result.OK, result.Fail)

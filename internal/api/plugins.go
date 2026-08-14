@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -14,7 +15,10 @@ import (
 )
 
 func (s *Server) pluginManager() *plugin.Manager {
-	return plugin.NewManager(s.opt.Paths.PluginsDir, s.opt.Paths.EnabledFile, plugin.ResolveInTreeRoot())
+	if s.plugins == nil {
+		s.plugins = plugin.NewManager(s.opt.Paths.PluginsDir, s.opt.Paths.EnabledFile, plugin.ResolveInTreeRoot())
+	}
+	return s.plugins
 }
 
 func (s *Server) handlePluginsList(w http.ResponseWriter, r *http.Request) {
@@ -32,20 +36,26 @@ func (s *Server) handlePluginsList(w http.ResponseWriter, r *http.Request) {
 		src := "installed"
 		if it.InTree {
 			src = "in-tree"
+		} else if it.RepositoryID != "" {
+			src = "repository"
 		}
 		out = append(out, map[string]any{
-			"id":             it.Manifest.ID,
-			"name":           it.Manifest.Name,
-			"version":        it.Manifest.Version,
-			"description":    it.Manifest.Description,
-			"runtime":        it.Manifest.Runtime,
-			"kind":           kinds,
-			"enabled":        it.Enabled,
-			"source":         src,
-			"path":           it.Root,
-			"capabilities":   it.Manifest.Capabilities,
-			"artifact_kinds": it.Manifest.ArtifactKinds,
-			"status":         it.Manifest.Status,
+			"id":              it.Manifest.ID,
+			"name":            it.Manifest.Name,
+			"version":         it.Manifest.Version,
+			"description":     it.Manifest.Description,
+			"runtime":         it.Manifest.Runtime,
+			"kind":            kinds,
+			"enabled":         it.Enabled,
+			"source":          src,
+			"path":            it.Root,
+			"capabilities":    it.Manifest.Capabilities,
+			"artifact_kinds":  it.Manifest.ArtifactKinds,
+			"status":          it.Manifest.Status,
+			"repository_id":   it.RepositoryID,
+			"repository_name": it.RepositoryName,
+			"repository_url":  it.RepositoryURL,
+			"official":        it.Official,
 		})
 	}
 	writeJSON(w, 200, map[string]any{
@@ -72,6 +82,100 @@ func (s *Server) handlePluginDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "id": id, "enabled": false})
+}
+
+func (s *Server) handlePluginRepositoriesList(w http.ResponseWriter, r *http.Request) {
+	repositories, err := s.market.Repositories()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repositories": repositories})
+}
+
+func (s *Server) handlePluginRepositoryAdd(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid json"})
+		return
+	}
+	repository, err := s.market.AddRepository(body.Name, body.URL)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "repository": repository})
+}
+
+func (s *Server) handlePluginRepositoryDelete(w http.ResponseWriter, r *http.Request) {
+	err := s.market.RemoveRepository(r.PathValue("id"))
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, plugin.ErrRepositoryNotFound) {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handlePluginRepositorySync(w http.ResponseWriter, r *http.Request) {
+	repository, err := s.market.Sync(r.Context(), r.PathValue("id"))
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, plugin.ErrRepositoryNotFound) {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]any{"ok": false, "error": err.Error(), "repository": repository})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "repository": repository})
+}
+
+func (s *Server) handlePluginRepositoriesSync(w http.ResponseWriter, r *http.Request) {
+	results, err := s.market.SyncAll(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "results": results})
+}
+
+func (s *Server) handlePluginMarketList(w http.ResponseWriter, r *http.Request) {
+	plugins, err := s.market.List()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	repositories, err := s.market.Repositories()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "plugins": plugins, "repositories": repositories})
+}
+
+func (s *Server) handlePluginMarketInstall(w http.ResponseWriter, r *http.Request) {
+	installed, err := s.market.Install(r.PathValue("repository"), r.PathValue("id"))
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, plugin.ErrMarketPluginMissing) {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"id":       installed.Manifest.ID,
+		"version":  installed.Manifest.Version,
+		"enabled":  installed.Enabled,
+		"official": installed.Official,
+	})
 }
 
 func (s *Server) handleArtifactsList(w http.ResponseWriter, r *http.Request) {

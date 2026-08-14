@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/grok-free-register/grok-reg/internal/config"
 	"github.com/grok-free-register/grok-reg/internal/cpa"
 	"github.com/grok-free-register/grok-reg/internal/localpool"
+	"github.com/grok-free-register/grok-reg/internal/state"
 )
 
 func (s *Server) handleLocalPoolList(w http.ResponseWriter, r *http.Request) {
@@ -59,14 +61,16 @@ func (s *Server) handleLocalPoolImport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.indexLocalEntries(entries)
+		importedCount := recordRunImport(dir)
 		if s.shouldAutoSync() {
 			go s.syncLocalPool(false)
 		}
 		writeJSON(w, 200, map[string]any{
-			"ok":      true,
-			"run_id":  body.RunID,
-			"added":   added,
-			"entries": entries,
+			"ok":             true,
+			"run_id":         body.RunID,
+			"added":          added,
+			"entries":        entries,
+			"imported_count": importedCount,
 		})
 		return
 	}
@@ -80,6 +84,11 @@ func (s *Server) handleLocalPoolImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.indexLocalEntries(entries)
+	if runID != "" {
+		if dir, resolveErr := s.resolveRun(runID); resolveErr == nil {
+			recordRunImport(dir)
+		}
+	}
 	if s.shouldAutoSync() {
 		go s.syncLocalPool(false)
 	}
@@ -178,17 +187,34 @@ func (s *Server) autoImportLatestRun(runID string) {
 		return
 	}
 	var entries []localpool.Entry
+	importedRunID := runID
 	if runID != "" {
-		if dir, err := s.resolveRun(runID); err == nil {
+		if dir, resolveErr := s.resolveRun(runID); resolveErr == nil {
 			_, entries, _ = s.localPool.ImportRun(dir)
+			recordRunImport(dir)
 		}
 	} else {
-		_, _, entries, _ = s.localPool.ImportLatest(s.opt.Paths.Outputs, 3)
+		importedRunID, _, entries, _ = s.localPool.ImportLatest(s.opt.Paths.Outputs, 3)
+		if importedRunID != "" {
+			if dir, resolveErr := s.resolveRun(importedRunID); resolveErr == nil {
+				recordRunImport(dir)
+			}
+		}
 	}
 	s.indexLocalEntries(entries)
 	if cfg.LocalPoolAutoSync {
 		go s.syncLocalPool(false)
 	}
+}
+
+func recordRunImport(runDir string) int {
+	files, _ := cpa.CollectCPAJSON(runDir)
+	count := len(files)
+	_ = state.UpdateRun(runDir, func(snapshot *state.Snapshot) {
+		snapshot.ImportedCount = count
+		snapshot.ImportedAt = time.Now().UTC().Format(time.RFC3339)
+	})
+	return count
 }
 
 func (s *Server) indexLocalEntries(entries []localpool.Entry) {

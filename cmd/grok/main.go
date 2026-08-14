@@ -21,6 +21,7 @@ import (
 	"github.com/grok-free-register/grok-reg/internal/logx"
 	"github.com/grok-free-register/grok-reg/internal/pipeline"
 	"github.com/grok-free-register/grok-reg/internal/plugin"
+	"github.com/grok-free-register/grok-reg/internal/runmetrics"
 	"github.com/grok-free-register/grok-reg/internal/state"
 	"github.com/grok-free-register/grok-reg/internal/tavilypool"
 	"github.com/grok-free-register/grok-reg/web"
@@ -270,16 +271,11 @@ func cmdStart(args []string) error {
 
 	st := state.NewStore(p.State)
 	_ = st.Set(func(s *state.Snapshot) {
-		s.Status = state.StatusRunning
-		s.RunID = runID
-		s.Target = target
-		s.Done = 0
-		s.Phase = state.PhaseIdle
-		s.PhaseDetail = "启动中"
-		s.LogPath = logPath
-		s.OutputDir = filepath.Join(p.Outputs, runID)
-		s.Error = ""
-		s.PID = 0
+		*s = state.Snapshot{
+			Status: state.StatusRunning, RunID: runID, Plugin: "xai-accounts", Target: target,
+			Phase: state.PhaseIdle, PhaseDetail: "启动中", LogPath: logPath,
+			OutputDir: filepath.Join(p.Outputs, runID), StartedAt: time.Now().UTC().Format(time.RFC3339),
+		}
 	})
 
 	pid, err := daemon.StartBackground(target, runID)
@@ -364,6 +360,7 @@ func runWorker(args []string) error {
 	_ = st.Set(func(s *state.Snapshot) {
 		s.Status = state.StatusRunning
 		s.RunID = run.RunID
+		s.Plugin = "xai-accounts"
 		s.Target = target
 		s.PID = os.Getpid()
 		s.LogPath = run.LogPath
@@ -381,7 +378,7 @@ func runWorker(args []string) error {
 	})
 	if err != nil {
 		_ = st.Set(func(s *state.Snapshot) {
-			s.Status = state.StatusError
+			s.Status = state.StatusFailed
 			s.Error = err.Error()
 			s.PhaseDetail = "错误退出"
 			s.PID = 0
@@ -414,8 +411,9 @@ func cmdStatus() error {
 			}
 		}
 		if snap.PID != 0 && !daemon.PIDAlive(snap.PID) {
-			snap.Status = state.StatusStopped
-			snap.PhaseDetail = "进程已结束"
+			snap.Status = state.StatusFailed
+			snap.Error = "进程意外退出但未写入终态"
+			snap.PhaseDetail = "意外终止"
 			snap.PID = 0
 		}
 	}
@@ -433,9 +431,10 @@ func cmdStop() error {
 	}
 	st := state.NewStore(p.State)
 	_ = st.Set(func(s *state.Snapshot) {
-		s.Status = state.StatusStopped
+		s.Status = state.StatusCancelled
 		s.Phase = state.PhaseIdle
-		s.PhaseDetail = "已手动停止"
+		s.PhaseDetail = "用户手动终止"
+		s.Error = "用户手动终止"
 		s.PID = 0
 	})
 	fmt.Println("[✓] 注册机已停止")
@@ -802,18 +801,16 @@ func runBridge(id string, it plugin.Installed, args []string, p home.Paths) erro
 	logPath := filepath.Join(p.LogsDir, fmt.Sprintf("run-%s.log", runID))
 	_ = os.MkdirAll(p.LogsDir, 0o700)
 
+	cfg, _ := config.Load(p.Config)
+	metrics := runmetrics.New(outputDir, runID, id, runmetrics.NewEnvironment(string(cfg.EmailMode), cfg.TurnstileProvider, cfg.ResinPlatform, cfg.RegisterProxy))
+	go metrics.SetEgressIP(runmetrics.DetectEgressIP(cfg.RegisterProxy, 3*time.Second))
 	st := state.NewStore(p.State)
 	_ = st.Set(func(s *state.Snapshot) {
-		s.Status = state.StatusRunning
-		s.RunID = runID
-		s.Target = target
-		s.Done = 0
-		s.Phase = state.PhaseIdle
-		s.PhaseDetail = fmt.Sprintf("bridge: %s", id)
-		s.LogPath = logPath
-		s.OutputDir = outputDir
-		s.Error = ""
-		s.PID = 0
+		*s = state.Snapshot{
+			Status: state.StatusRunning, RunID: runID, Plugin: id, Target: target,
+			Phase: state.PhaseIdle, PhaseDetail: fmt.Sprintf("bridge: %s", id),
+			LogPath: logPath, OutputDir: outputDir, StartedAt: time.Now().UTC().Format(time.RFC3339),
+		}
 	})
 
 	bridgePath := filepath.Join(it.Root, it.Manifest.Entry.Bridge)
@@ -829,16 +826,29 @@ func runBridge(id string, it plugin.Installed, args []string, p home.Paths) erro
 		PluginCfg:   map[string]any{"auto": true},
 		OutputDir:   outputDir,
 		ArtifactDir: filepath.Join(p.Root, "artifacts"),
+		Metrics:     metrics,
 	})
-	if err != nil {
-		_ = st.Set(func(s *state.Snapshot) { s.Status = state.StatusError; s.Error = err.Error() })
-		return err
+	terminalErr := err
+	if terminalErr == nil {
+		terminalErr = result.Error
+	}
+	if terminalErr != nil {
+		metrics.Finish("failed", terminalErr)
+		_ = st.Set(func(s *state.Snapshot) {
+			s.Status = state.StatusFailed
+			s.Error = terminalErr.Error()
+			s.PhaseDetail = "意外终止"
+		})
+		return terminalErr
 	}
 
+	metrics.Finish("completed", nil)
 	_ = st.Set(func(s *state.Snapshot) {
-		s.Status = state.StatusStopped
+		s.Status = state.StatusCompleted
 		s.Done = result.OK + result.Fail
+		s.FailCount = result.Fail
 		s.Phase = state.PhaseIdle
+		s.PhaseDetail = fmt.Sprintf("完成 %d/%d", result.OK, result.Total)
 	})
 	fmt.Printf("[✓] %s 完成 ok=%d fail=%d\n", id, result.OK, result.Fail)
 	fmt.Printf("    日志: %s\n", logPath)

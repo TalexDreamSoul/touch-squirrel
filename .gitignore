@@ -32,12 +32,17 @@ __pycache__/
 panel/node_modules/
 panel/.next/
 panel/out/
+panel/*.tsbuildinfo
 
 # Logs / runtime
 *.log
 logs/
 data/
 .grok-home/
+.grok-home-*/
+
+# Generated image scratch space
+.image-gen/
 
 # local agent
 .serena/

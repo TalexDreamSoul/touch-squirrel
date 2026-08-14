@@ -26,12 +26,23 @@ type Event struct {
 	Raw  json.RawMessage `json:"-"`
 }
 
+type ReportedStage struct {
+	Name       string `json:"name"`
+	DurationMS int64  `json:"duration_ms"`
+	Status     string `json:"status,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
 // Progress reports per-attempt advancement.
 type Progress struct {
-	Done     int    `json:"done"`
-	Total    int    `json:"total"`
-	Email    string `json:"email,omitempty"`
-	Username string `json:"username,omitempty"`
+	Done       int             `json:"done"`
+	Total      int             `json:"total"`
+	Email      string          `json:"email,omitempty"`
+	Username   string          `json:"username,omitempty"`
+	DurationMS int64           `json:"duration_ms,omitempty"`
+	Status     string          `json:"status,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	Stages     []ReportedStage `json:"stages,omitempty"`
 }
 
 // Log is a free-form log line.

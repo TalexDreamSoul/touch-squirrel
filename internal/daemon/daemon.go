@@ -120,9 +120,10 @@ func Stop(paths home.Paths) error {
 		ClearPID(paths.PID)
 		store := state.NewStore(paths.State)
 		_ = store.Set(func(s *state.Snapshot) {
-			s.Status = state.StatusStopped
+			s.Status = state.StatusFailed
 			s.Phase = state.PhaseIdle
-			s.PhaseDetail = "已停止"
+			s.PhaseDetail = "意外终止"
+			s.Error = "进程已退出但状态未更新"
 			s.PID = 0
 		})
 		return fmt.Errorf("注册机未在运行（残留 PID 已清理）")
@@ -151,7 +152,7 @@ func FormatStatus(snap state.Snapshot) string {
 	alive := PIDAlive(snap.PID)
 	status := snap.Status
 	if status == state.StatusRunning && !alive && snap.PID != 0 {
-		status = state.StatusError
+		status = state.StatusFailed
 		if snap.Error == "" {
 			snap.Error = "进程已退出但状态未更新"
 		}
@@ -164,8 +165,12 @@ func FormatStatus(snap state.Snapshot) string {
 	switch status {
 	case state.StatusRunning:
 		b.WriteString("状态: 运行中\n")
-	case state.StatusError:
-		b.WriteString("状态: 错误\n")
+	case state.StatusCompleted:
+		b.WriteString("状态: 已完成\n")
+	case state.StatusCancelled:
+		b.WriteString("状态: 已终止\n")
+	case state.StatusFailed, state.StatusError:
+		b.WriteString("状态: 意外终止\n")
 	default:
 		b.WriteString("状态: 未运行\n")
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/grok-free-register/grok-reg/internal/logx"
 	"github.com/grok-free-register/grok-reg/internal/oauth"
 	"github.com/grok-free-register/grok-reg/internal/protocol"
+	"github.com/grok-free-register/grok-reg/internal/runmetrics"
 	"github.com/grok-free-register/grok-reg/internal/state"
 	"github.com/grok-free-register/grok-reg/internal/turnstile"
 )
@@ -62,6 +63,7 @@ type Engine struct {
 
 	oauthCh  chan SSOJob
 	uploader *cpa.Uploader
+	metrics  *runmetrics.Collector
 
 	done atomic.Int64
 	ssoN atomic.Int64
@@ -83,11 +85,26 @@ func Run(ctx context.Context, opt Options) error {
 	return e.run(ctx)
 }
 
-func (e *Engine) run(ctx context.Context) error {
+func (e *Engine) run(ctx context.Context) (runErr error) {
 	cfg := e.opt.Cfg
 	log := e.opt.Log
 	st := e.opt.Store
-
+	e.metrics = runmetrics.New(
+		e.opt.Run.Root,
+		e.opt.Run.RunID,
+		"xai-accounts",
+		runmetrics.NewEnvironment(string(cfg.EmailMode), cfg.TurnstileProvider, cfg.ResinPlatform, cfg.RegisterProxy),
+	)
+	go e.metrics.SetEgressIP(runmetrics.DetectEgressIP(cfg.RegisterProxy, 3*time.Second))
+	defer func() {
+		status := "completed"
+		if runErr != nil {
+			status = "failed"
+		} else if int(e.done.Load()) < e.opt.Target {
+			status = "cancelled"
+		}
+		e.metrics.Finish(status, runErr)
+	}()
 	config.ApplyProxyEnv(cfg)
 
 	sWorkers, pWorkers, cWorkers, oauthWorkers, physCap := deriveWorkers(cfg)
@@ -114,6 +131,7 @@ func (e *Engine) run(ctx context.Context) error {
 	_ = st.Set(func(s *state.Snapshot) {
 		s.Status = state.StatusRunning
 		s.RunID = e.opt.Run.RunID
+		s.Plugin = "xai-accounts"
 		s.Target = e.opt.Target
 		s.Done = 0
 		s.Phase = state.PhaseClearance
@@ -126,11 +144,14 @@ func (e *Engine) run(ctx context.Context) error {
 		s.Error = ""
 	})
 
+	e.metrics.StartStage("clearance")
 	// Clearance
+	var clearanceErr error
 	if cfg.ClearanceEnabled {
 		e.cm = clearance.NewManager(cfg.FlareSolverrURL, cfg.ClearanceProxy, cfg.ClearanceURLs)
 		msg, err := e.cm.Prewarm()
 		if err != nil {
+			clearanceErr = err
 			log.Warnf("clearance: %v (%s)", err, msg)
 		} else {
 			log.Infof("[clearance] %s", msg)
@@ -139,6 +160,12 @@ func (e *Engine) run(ctx context.Context) error {
 		log.Info("[clearance] 未启用")
 	}
 
+	clearanceStatus := "completed"
+	if clearanceErr != nil {
+		clearanceStatus = "warning"
+	}
+	e.metrics.EndStage("clearance", clearanceStatus, clearanceErr)
+	e.metrics.StartStage("initialize_clients")
 	var err error
 	e.xai, err = protocol.NewClient(cfg.RegisterProxy, e.cm)
 	if err != nil {
@@ -206,6 +233,8 @@ func (e *Engine) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	e.metrics.EndStage("initialize_clients", "completed", nil)
+	e.metrics.StartStage("fetch_config")
 
 	_ = st.Set(func(s *state.Snapshot) {
 		s.Phase = state.PhaseRegister
@@ -215,15 +244,18 @@ func (e *Engine) run(ctx context.Context) error {
 	scfg, err := e.xai.FetchConfig()
 	if err != nil {
 		_ = st.Set(func(s *state.Snapshot) {
-			s.Status = state.StatusError
+			s.Status = state.StatusFailed
 			s.Error = err.Error()
 			s.PhaseDetail = "配置获取失败"
 		})
+		e.metrics.EndStage("fetch_config", "failed", err)
 		return fmt.Errorf("config fetch: %w", err)
 	}
+	e.metrics.EndStage("fetch_config", "completed", nil)
 	log.Infof("SITE_KEY=%s ACTION_ID=%s...", scfg.SiteKey, trim(scfg.ActionID, 12))
 	log.OKf("注册服务已启动 | 目标 %d | run=%s", e.opt.Target, e.opt.Run.RunID)
 
+	e.metrics.StartStage("registration")
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -286,6 +318,12 @@ func (e *Engine) run(ctx context.Context) error {
 		}
 	}
 shutdown:
+	registrationStatus := "cancelled"
+	if int(e.done.Load()) >= e.opt.Target {
+		registrationStatus = "completed"
+	}
+	e.metrics.EndStage("registration", registrationStatus, nil)
+	e.metrics.StartStage("shutdown")
 	// 1) stop S/P/C producers (ctx canceled)
 	// 2) wait register workers so no more sends to oauthCh
 	// 3) close oauthCh so OAuth workers exit range
@@ -293,10 +331,15 @@ shutdown:
 	close(e.oauthCh)
 	waitGroupTimeout(&e.wgOAuth, 30*time.Second, log, "oauth workers")
 	waitGroupTimeout(&e.wgAux, 3*time.Second, log, "aux")
+	e.metrics.EndStage("shutdown", "completed", nil)
 
 	_ = st.Set(func(s *state.Snapshot) {
-		if s.Status != state.StatusError {
-			s.Status = state.StatusStopped
+		if s.Status != state.StatusFailed && s.Status != state.StatusError {
+			if int(e.done.Load()) >= e.opt.Target {
+				s.Status = state.StatusCompleted
+			} else {
+				s.Status = state.StatusCancelled
+			}
 		}
 		s.Phase = state.PhaseIdle
 		s.PhaseDetail = fmt.Sprintf("完成 %d/%d", e.done.Load(), e.opt.Target)
@@ -425,8 +468,12 @@ func (e *Engine) pWorker(ctx context.Context, id int) {
 			}
 			continue
 		}
+		e.metrics.StartAccount(h.Email)
+		e.metrics.StartAccountStage(h.Email, "email_code")
 		if err := e.xai.CreateEmailCode(h.Email); err != nil {
 			e.qPending.Release()
+			e.metrics.EndAccountStage(h.Email, "email_code", "failed", err)
+			e.metrics.FinishAccount(h.Email, "failed", err)
 			log.Debugf("[P%d] create code %s: %v", id, h.Email, err)
 			select {
 			case <-ctx.Done():
@@ -437,12 +484,16 @@ func (e *Engine) pWorker(ctx context.Context, id int) {
 		}
 		code, err := e.mail.PollCode(h, 90*time.Second)
 		if err != nil {
+			e.metrics.EndAccountStage(h.Email, "email_code", "failed", err)
+			e.metrics.FinishAccount(h.Email, "failed", err)
 			e.qPending.Release()
 			log.Debugf("[P%d] poll code: %v", id, err)
 			continue
 		}
+		e.metrics.EndAccountStage(h.Email, "email_code", "completed", nil)
 		item := QItem{Email: h.Email, Password: h.Password, Code: code, Handle: h}
 		if err := e.inv.PutQ(ctx, item, 2*time.Minute); err != nil {
+			e.metrics.FinishAccount(h.Email, "cancelled", err)
 			e.qPending.Release()
 			return
 		}
@@ -469,14 +520,19 @@ func (e *Engine) cWorker(ctx context.Context, id int, scfg protocol.SignupConfig
 			s.PhaseDetail = fmt.Sprintf("正在注册 %s", q.Email)
 		})
 		log.Startf("开始注册 %s", q.Email)
+		e.metrics.StartAccountStage(q.Email, "verify_email")
 
 		e.xai.ClearAuthCookies()
 		if err := e.xai.VerifyEmailCode(q.Email, q.Code); err != nil {
+			e.metrics.EndAccountStage(q.Email, "verify_email", "failed", err)
+			e.metrics.FinishAccount(q.Email, "failed", err)
 			log.Warnf("verify fail %s: %v", q.Email, err)
 			pair.Release()
 			e.fail.Add(1)
 			continue
 		}
+		e.metrics.EndAccountStage(q.Email, "verify_email", "completed", nil)
+		e.metrics.StartAccountStage(q.Email, "signup")
 		body := protocol.BuildSignupBody(q.Email, q.Password, q.Code, token)
 		text, sso, err := e.xai.SignupServerAction(body, scfg.ActionID, scfg.StateTree)
 		if sso == "" {
@@ -484,6 +540,12 @@ func (e *Engine) cWorker(ctx context.Context, id int, scfg protocol.SignupConfig
 		}
 		pair.Release()
 		if err != nil || sso == "" {
+			signupErr := err
+			if signupErr == nil {
+				signupErr = fmt.Errorf("signup response missing SSO")
+			}
+			e.metrics.EndAccountStage(q.Email, "signup", "failed", signupErr)
+			e.metrics.FinishAccount(q.Email, "failed", signupErr)
 			preview := text
 			if len(preview) > 180 {
 				preview = preview[:180]
@@ -492,11 +554,16 @@ func (e *Engine) cWorker(ctx context.Context, id int, scfg protocol.SignupConfig
 			e.fail.Add(1)
 			continue
 		}
+		e.metrics.EndAccountStage(q.Email, "signup", "completed", nil)
 
 		// ensure run dirs exist (first credential)
+		e.metrics.StartAccountStage(q.Email, "persist_sso")
 		accPath := filepath.Join(e.opt.Run.SSO, "accounts.txt")
-		if err := cpa.AppendSSO(accPath, q.Email, q.Password, sso); err != nil {
-			log.Warnf("write sso: %v", err)
+		if writeErr := cpa.AppendSSO(accPath, q.Email, q.Password, sso); writeErr != nil {
+			e.metrics.EndAccountStage(q.Email, "persist_sso", "failed", writeErr)
+			log.Warnf("write sso: %v", writeErr)
+		} else {
+			e.metrics.EndAccountStage(q.Email, "persist_sso", "completed", nil)
 		}
 		_ = cpa.AppendAuthSession(filepath.Join(e.opt.Run.SSO, "auth-sessions.jsonl"), q.Email, sso)
 		n := e.ssoN.Add(1)
@@ -545,21 +612,28 @@ func (e *Engine) oauthWorker(ctx context.Context, id int) {
 			s.PhaseDetail = fmt.Sprintf("正在 OAuth (%s)", job.Email)
 		})
 		log.Startf("OAuth %s", job.Email)
+		e.metrics.StartAccountStage(job.Email, "oauth")
 		cred, err := e.oauth.Exchange(ctx, job.SSO)
 		if err != nil {
+			e.metrics.EndAccountStage(job.Email, "oauth", "failed", err)
+			e.metrics.FinishAccount(job.Email, "failed", err)
 			// browser fallback not implemented in v1 HTTP path — log and count fail
 			log.Warnf("OAuth fail %s: %v", job.Email, err)
 			e.fail.Add(1)
 			continue
 		}
+		e.metrics.EndAccountStage(job.Email, "oauth", "completed", nil)
 		e.oaN.Add(1)
 		doc := cpa.FromCredential(cred, job.Email)
 		_ = e.opt.Store.Set(func(s *state.Snapshot) {
 			s.Phase = state.PhaseProbe
 			s.PhaseDetail = fmt.Sprintf("探活 %s", job.Email)
 		})
+		e.metrics.StartAccountStage(job.Email, "probe")
 		if e.opt.Cfg.ProbeEnabled {
 			if err := cpa.Probe(doc, e.opt.Cfg.RegisterProxy); err != nil {
+				e.metrics.EndAccountStage(job.Email, "probe", "failed", err)
+				e.metrics.FinishAccount(job.Email, "failed", err)
 				log.Warnf("探活失败 %s: %v", job.Email, err)
 				path, _ := cpa.WriteAtomic(e.opt.Run.Discarded, doc, cpa.DefaultSecret())
 				_ = path
@@ -567,12 +641,18 @@ func (e *Engine) oauthWorker(ctx context.Context, id int) {
 				continue
 			}
 		}
+		e.metrics.EndAccountStage(job.Email, "probe", "completed", nil)
+		e.metrics.StartAccountStage(job.Email, "persist_cpa")
 		path, err := cpa.WriteAtomic(e.opt.Run.CPA, doc, cpa.DefaultSecret())
 		if err != nil {
+			e.metrics.EndAccountStage(job.Email, "persist_cpa", "failed", err)
+			e.metrics.FinishAccount(job.Email, "failed", err)
 			log.Warnf("写 CPA 失败: %v", err)
 			e.fail.Add(1)
 			continue
 		}
+		e.metrics.EndAccountStage(job.Email, "persist_cpa", "completed", nil)
+		e.metrics.FinishAccount(job.Email, "completed", nil)
 		// Auto-upload to CPA management (non-fatal).
 		if e.uploader != nil && e.uploader.Enabled() {
 			up := e.uploader

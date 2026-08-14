@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/grok-free-register/grok-reg/internal/localpool"
 	"github.com/grok-free-register/grok-reg/internal/patrol"
 	"github.com/grok-free-register/grok-reg/internal/plugin"
+	"github.com/grok-free-register/grok-reg/internal/runmetrics"
 	"github.com/grok-free-register/grok-reg/internal/state"
 	"github.com/grok-free-register/grok-reg/internal/statuspage"
 	"github.com/grok-free-register/grok-reg/internal/tavilypool"
@@ -44,19 +46,29 @@ type Options struct {
 }
 
 type Server struct {
-	opt       Options
-	mux       *http.ServeMux
-	transfer  *transfer.Service
-	patrol    *patrol.Service
-	cluster   *cluster.Service
-	status    *statuspage.Service
-	localPool *localpool.Service
-	accounts  *acctpool.Store
-	hunter    *hunter.Service
+	opt            Options
+	mux            *http.ServeMux
+	transfer       *transfer.Service
+	patrol         *patrol.Service
+	cluster        *cluster.Service
+	status         *statuspage.Service
+	localPool      *localpool.Service
+	accounts       *acctpool.Store
+	hunter         *hunter.Service
+	plugins        *plugin.Manager
+	market         *plugin.Market
+	registerMu     sync.Mutex
+	registerCancel context.CancelFunc
 }
 
 func New(opt Options) *Server {
 	s := &Server{opt: opt, mux: http.NewServeMux()}
+	s.plugins = plugin.NewManager(opt.Paths.PluginsDir, opt.Paths.EnabledFile, plugin.ResolveInTreeRoot())
+	marketCache := opt.Paths.MarketCache
+	if marketCache == "" && opt.Paths.Root != "" {
+		marketCache = filepath.Join(opt.Paths.Root, "market-cache")
+	}
+	s.market = plugin.NewMarket(marketCache, s.plugins)
 	s.transfer = transfer.NewService(opt.Paths.ExportsDir, opt.Paths.TmpDir, opt.Paths.UploadCache,
 		func() (string, string, transfer.Defaults) {
 			cfg, _ := config.Load(opt.Paths.Config)
@@ -218,11 +230,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/stop", s.handleStop)
 	s.mux.HandleFunc("GET /api/logs", s.handleLogs)
 	s.mux.HandleFunc("GET /api/runs", s.handleRuns)
+	s.mux.HandleFunc("GET /api/register-metrics", s.handleRegisterMetrics)
 	s.mux.HandleFunc("GET /api/runs/{id}/files", s.handleRunFiles)
+	s.mux.HandleFunc("GET /api/runs/{id}/log", s.handleRunLog)
+	s.mux.HandleFunc("GET /api/runs/{id}/metrics", s.handleRunMetrics)
+	s.mux.HandleFunc("DELETE /api/runs/{id}", s.handleRunDelete)
 	s.mux.HandleFunc("GET /api/runs/{id}/download", s.handleDownload)
 	s.mux.HandleFunc("GET /api/runs/{id}/file", s.handleFile)
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	s.mux.HandleFunc("PUT /api/config", s.handlePutConfig)
+	s.mux.HandleFunc("GET /api/infrastructure/export", s.handleInfrastructureExport)
 	s.mux.HandleFunc("POST /api/infrastructure/import", s.handleInfrastructureImport)
 
 	// transfer: batch upload
@@ -285,6 +302,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/plugins", s.handlePluginsList)
 	s.mux.HandleFunc("POST /api/plugins/{id}/enable", s.handlePluginEnable)
 	s.mux.HandleFunc("POST /api/plugins/{id}/disable", s.handlePluginDisable)
+	s.mux.HandleFunc("GET /api/plugin-repositories", s.handlePluginRepositoriesList)
+	s.mux.HandleFunc("POST /api/plugin-repositories", s.handlePluginRepositoryAdd)
+	s.mux.HandleFunc("DELETE /api/plugin-repositories/{id}", s.handlePluginRepositoryDelete)
+	s.mux.HandleFunc("POST /api/plugin-repositories/{id}/sync", s.handlePluginRepositorySync)
+	s.mux.HandleFunc("POST /api/plugin-repositories/sync", s.handlePluginRepositoriesSync)
+	s.mux.HandleFunc("GET /api/plugin-market", s.handlePluginMarketList)
+	s.mux.HandleFunc("POST /api/plugin-market/{repository}/plugins/{id}/install", s.handlePluginMarketInstall)
 	s.mux.HandleFunc("GET /api/artifacts", s.handleArtifactsList)
 	s.mux.HandleFunc("GET /api/tavily/keys", s.handleTavilyKeysList)
 	s.mux.HandleFunc("POST /api/tavily/keys", s.handleTavilyKeysAdd)
@@ -457,11 +481,24 @@ func (s *Server) reconcile(snap state.Snapshot) state.Snapshot {
 			}
 		}
 		if pid != 0 && !daemon.PIDAlive(pid) {
-			snap.Status = state.StatusStopped
-			if snap.PhaseDetail == "" || snap.PhaseDetail == "运行中" {
-				snap.PhaseDetail = "进程已结束"
+			snap.Status = state.StatusFailed
+			if snap.Error == "" {
+				snap.Error = "进程意外退出但未写入终态"
 			}
+			snap.PhaseDetail = "意外终止"
 			snap.PID = 0
+		}
+	}
+	if snap.Status == state.StatusStopped {
+		detail := strings.TrimSpace(snap.PhaseDetail)
+		switch {
+		case snap.Error != "":
+			snap.Status = state.StatusFailed
+		case strings.Contains(detail, "手动停止") || strings.Contains(detail, "手动终止"):
+			snap.Status = state.StatusCancelled
+			snap.Error = firstNonEmpty(snap.Error, "用户手动终止")
+		case strings.HasPrefix(detail, "完成"):
+			snap.Status = state.StatusCompleted
 		}
 	}
 	return snap
@@ -477,8 +514,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if os.IsNotExist(err) {
 		snap = state.Snapshot{Status: state.StatusStopped}
 	}
-	snap = s.reconcile(snap)
-	writeJSON(w, 200, map[string]any{"ok": true, "status": snap})
+	reconciled := s.reconcile(snap)
+	if reconciled != snap {
+		_ = st.Set(func(current *state.Snapshot) { *current = reconciled })
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "status": reconciled})
 }
 
 type startReq struct {
@@ -589,8 +629,8 @@ func (s *Server) handleXAIStart(w http.ResponseWriter, r *http.Request, target i
 
 // handleBridgeStart starts a bridge-type plugin subprocess as a tracked job.
 func (s *Server) handleBridgeStart(w http.ResponseWriter, r *http.Request, target int, pluginID string, it plugin.Installed, pluginCfg map[string]any) {
-	if pip, err := daemon.ReadPID(s.opt.Paths.PID); err == nil && daemon.PIDAlive(pip) {
-		writeJSON(w, 409, map[string]any{"ok": false, "error": fmt.Sprintf("已有注册任务运行中 (pid %d)", pip)})
+	if s.pipelineRunning() {
+		writeJSON(w, 409, map[string]any{"ok": false, "error": "已有注册任务运行中"})
 		return
 	}
 
@@ -598,12 +638,27 @@ func (s *Server) handleBridgeStart(w http.ResponseWriter, r *http.Request, targe
 	outputDir := filepath.Join(s.opt.Paths.Outputs, runID)
 	logPath := filepath.Join(s.opt.Paths.LogsDir, fmt.Sprintf("run-%s.log", runID))
 	_ = os.MkdirAll(s.opt.Paths.LogsDir, 0o700)
+	_ = os.MkdirAll(outputDir, 0o700)
 
 	bridgePath := filepath.Join(it.Root, it.Manifest.Entry.Bridge)
 
 	// Build env: inherit host config for BitBrowser, Clash, captcha keys, and
 	// bridge roots (grok-register-panel / reg-factory checkouts).
 	cfg, _ := config.Load(s.opt.Paths.Config)
+	metrics := runmetrics.New(outputDir, runID, pluginID, runmetrics.NewEnvironment(string(cfg.EmailMode), cfg.TurnstileProvider, cfg.ResinPlatform, cfg.RegisterProxy))
+	go metrics.SetEgressIP(runmetrics.DetectEgressIP(cfg.RegisterProxy, 3*time.Second))
+	st := state.NewStore(s.opt.Paths.State)
+	_ = st.Set(func(snapshot *state.Snapshot) {
+		*snapshot = state.Snapshot{
+			Status: state.StatusRunning, RunID: runID, Plugin: pluginID, Target: target,
+			Phase: state.PhaseIdle, PhaseDetail: fmt.Sprintf("bridge: %s", pluginID),
+			LogPath: logPath, OutputDir: outputDir, StartedAt: time.Now().UTC().Format(time.RFC3339),
+		}
+	})
+	bridgeCtx, cancelBridge := context.WithCancel(context.Background())
+	s.registerMu.Lock()
+	s.registerCancel = cancelBridge
+	s.registerMu.Unlock()
 	bridgeEnv := map[string]string{}
 	if pool := firstNonEmpty(cfg.BridgeOutlookPoolDir, os.Getenv("OUTLOOK_POOL_DIR")); pool != "" {
 		bridgeEnv["OUTLOOK_POOL_DIR"] = pool
@@ -671,7 +726,12 @@ func (s *Server) handleBridgeStart(w http.ResponseWriter, r *http.Request, targe
 	}
 	bridgeMgr := jobs.NewManager(pluginID, 24*time.Hour)
 	go func() {
-		if _, err := bridge.Run(context.Background(), bridgeMgr, bridge.Config{
+		defer func() {
+			s.registerMu.Lock()
+			s.registerCancel = nil
+			s.registerMu.Unlock()
+		}()
+		result, runErr := bridge.Run(bridgeCtx, bridgeMgr, bridge.Config{
 			PluginID:    pluginID,
 			BridgePath:  bridgePath,
 			PythonExe:   firstNonEmpty(cfg.BridgePythonExe, os.Getenv("GROK_PYTHON")),
@@ -681,9 +741,38 @@ func (s *Server) handleBridgeStart(w http.ResponseWriter, r *http.Request, targe
 			OutputDir:   outputDir,
 			ArtifactDir: filepath.Join(s.opt.Paths.Root, "artifacts"),
 			LogPath:     logPath,
-		}); err != nil {
-			// bridge 启动/运行失败时，错误被写到 run 日志与 stderr，便于面板排障。
-			msg := fmt.Sprintf("bridge %s run failed: %v\n", pluginID, err)
+			Metrics:     metrics,
+		})
+		terminalErr := runErr
+		if terminalErr == nil {
+			terminalErr = result.Error
+		}
+		terminalStatus := state.StatusCompleted
+		metricStatus := "completed"
+		phaseDetail := fmt.Sprintf("完成 %d/%d", result.OK, result.Total)
+		if terminalErr != nil {
+			terminalStatus = state.StatusFailed
+			metricStatus = "failed"
+			phaseDetail = "意外终止"
+			if terminalErr == context.Canceled {
+				terminalStatus = state.StatusCancelled
+				metricStatus = "cancelled"
+				phaseDetail = "用户手动终止"
+			}
+		}
+		metrics.Finish(metricStatus, terminalErr)
+		_ = state.NewStore(s.opt.Paths.State).Set(func(snapshot *state.Snapshot) {
+			snapshot.Status = terminalStatus
+			snapshot.Done = result.OK + result.Fail
+			snapshot.FailCount = result.Fail
+			snapshot.Phase = state.PhaseIdle
+			snapshot.PhaseDetail = phaseDetail
+			if terminalErr != nil {
+				snapshot.Error = terminalErr.Error()
+			}
+		})
+		if terminalErr != nil {
+			msg := fmt.Sprintf("bridge %s run failed: %v\n", pluginID, terminalErr)
 			_, _ = fmt.Fprint(os.Stderr, msg)
 			if f, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); ferr == nil {
 				_, _ = f.WriteString(msg)
@@ -720,25 +809,17 @@ func (s *Server) ensurePipelineStart(target int) (runID string, pid int, logPath
 
 	st := state.NewStore(s.opt.Paths.State)
 	_ = st.Set(func(snap *state.Snapshot) {
-		snap.Status = state.StatusRunning
-		snap.RunID = runID
-		snap.Target = target
-		snap.Done = 0
-		snap.SSOCount = 0
-		snap.OAuthCount = 0
-		snap.FailCount = 0
-		snap.Phase = state.PhaseIdle
-		snap.PhaseDetail = "启动中"
-		snap.LogPath = logPath
-		snap.OutputDir = filepath.Join(s.opt.Paths.Outputs, runID)
-		snap.Error = ""
-		snap.PID = 0
+		*snap = state.Snapshot{
+			Status: state.StatusRunning, RunID: runID, Plugin: "xai-accounts", Target: target,
+			Phase: state.PhaseIdle, PhaseDetail: "启动中", LogPath: logPath,
+			OutputDir: filepath.Join(s.opt.Paths.Outputs, runID), StartedAt: time.Now().UTC().Format(time.RFC3339),
+		}
 	})
 
 	pid, err = daemon.StartBackground(target, runID)
 	if err != nil {
 		_ = st.Set(func(snap *state.Snapshot) {
-			snap.Status = state.StatusError
+			snap.Status = state.StatusFailed
 			snap.Error = err.Error()
 			snap.PhaseDetail = "启动失败"
 		})
@@ -754,22 +835,40 @@ func (s *Server) pipelineRunning() bool {
 	if p, err := daemon.ReadPID(s.opt.Paths.PID); err == nil && daemon.PIDAlive(p) {
 		return true
 	}
-	return false
+	store := state.NewStore(s.opt.Paths.State)
+	snapshot, err := store.Load()
+	if err != nil {
+		return false
+	}
+	reconciled := s.reconcile(snapshot)
+	if reconciled != snapshot {
+		_ = store.Set(func(current *state.Snapshot) { *current = reconciled })
+	}
+	return reconciled.Status == state.StatusRunning
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
-	if err := daemon.Stop(s.opt.Paths); err != nil {
-		// still mark stopped if process gone
-		if !strings.Contains(err.Error(), "未在运行") {
-			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
+	stopErr := daemon.Stop(s.opt.Paths)
+	if stopErr != nil && !strings.Contains(stopErr.Error(), "未在运行") {
+		writeJSON(w, 400, map[string]any{"ok": false, "error": stopErr.Error()})
+		return
+	}
+	if stopErr != nil {
+		s.registerMu.Lock()
+		cancel := s.registerCancel
+		s.registerMu.Unlock()
+		if cancel == nil {
+			writeJSON(w, 409, map[string]any{"ok": false, "error": "任务已不在运行"})
 			return
 		}
+		cancel()
 	}
 	st := state.NewStore(s.opt.Paths.State)
 	_ = st.Set(func(snap *state.Snapshot) {
-		snap.Status = state.StatusStopped
+		snap.Status = state.StatusCancelled
 		snap.Phase = state.PhaseIdle
-		snap.PhaseDetail = "已手动停止"
+		snap.PhaseDetail = "用户手动终止"
+		snap.Error = "用户手动终止"
 		snap.PID = 0
 	})
 	go s.autoImportLatestRun("")
@@ -797,14 +896,10 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !follow {
-		data, err := os.ReadFile(path)
+		text, err := readLogTail(path, tailN)
 		if err != nil {
 			writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
 			return
-		}
-		text := string(data)
-		if lines := strings.Split(text, "\n"); len(lines) > tailN {
-			text = strings.Join(lines[len(lines)-tailN:], "\n")
 		}
 		writeJSON(w, 200, map[string]any{"ok": true, "path": path, "log": text})
 		return
@@ -872,56 +967,85 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	page, pageSize := parsePage(r, 1, 10, 100)
-	// Fetch all run dirs then page — outputs volume is small enough for panel use.
 	dirs, err := cpa.ListRunDirs(s.opt.Paths.Outputs, 0)
 	if err != nil {
 		writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	total := len(dirs)
-	start := (page - 1) * pageSize
-	if start > total {
-		start = total
-	}
-	end := start + pageSize
-	if end > total {
-		end = total
-	}
+	start := min((page-1)*pageSize, total)
+	end := min(start+pageSize, total)
 	pageDirs := dirs[start:end]
 
+	importedByRun := map[string]int{}
+	for _, entry := range s.localPool.List() {
+		if entry.SourceRun != "" {
+			importedByRun[entry.SourceRun]++
+		}
+	}
+	current, _ := state.NewStore(s.opt.Paths.State).Load()
 	type runInfo struct {
-		ID       string `json:"id"`
-		Path     string `json:"path"`
-		CPACount int    `json:"cpa_count"`
-		SSOFiles int    `json:"sso_files"`
-		ModTime  string `json:"mod_time"`
+		ID                 string `json:"id"`
+		Path               string `json:"path"`
+		Plugin             string `json:"plugin"`
+		Status             string `json:"status"`
+		Phase              string `json:"phase,omitempty"`
+		PhaseDetail        string `json:"phase_detail,omitempty"`
+		Error              string `json:"error,omitempty"`
+		Target             int    `json:"target,omitempty"`
+		Done               int    `json:"done,omitempty"`
+		FailCount          int    `json:"fail_count,omitempty"`
+		CPACount           int    `json:"cpa_count"`
+		SSOFiles           int    `json:"sso_files"`
+		ImportedCount      int    `json:"imported_count"`
+		StartedAt          string `json:"started_at,omitempty"`
+		UpdatedAt          string `json:"updated_at,omitempty"`
+		ModTime            string `json:"mod_time"`
+		DurationMS         int64  `json:"duration_ms,omitempty"`
+		AverageAccountMS   int64  `json:"average_account_ms,omitempty"`
+		AccountMetricCount int    `json:"account_metric_count,omitempty"`
 	}
 	out := make([]runInfo, 0, len(pageDirs))
 	for _, dir := range pageDirs {
+		id := filepath.Base(dir)
 		files, _ := cpa.CollectCPAJSON(dir)
 		ssoN := 0
-		if entries, err := os.ReadDir(filepath.Join(dir, "SSO")); err == nil {
+		if entries, readErr := os.ReadDir(filepath.Join(dir, "SSO")); readErr == nil {
 			ssoN = len(entries)
 		}
-		mt := ""
-		if fi, err := os.Stat(dir); err == nil {
-			mt = fi.ModTime().UTC().Format(time.RFC3339)
+		modTime := ""
+		if info, statErr := os.Stat(dir); statErr == nil {
+			modTime = info.ModTime().UTC().Format(time.RFC3339)
+		}
+		snapshot, _ := state.LoadRun(dir)
+		if current.RunID == id && (snapshot.RunID == "" || current.UpdatedAt > snapshot.UpdatedAt) {
+			snapshot = current
+		}
+		pluginID := snapshot.Plugin
+		if pluginID == "" && (len(files) > 0 || ssoN > 0) {
+			pluginID = "xai-accounts"
+		}
+		status := string(snapshot.Status)
+		if status == "" || status == string(state.StatusStopped) {
+			status = "unknown"
+		}
+		durationMS, averageAccountMS, accountMetricCount := runMetricsSummary(dir)
+		importedCount := snapshot.ImportedCount
+		if importedCount == 0 {
+			importedCount = importedByRun[id]
 		}
 		out = append(out, runInfo{
-			ID:       filepath.Base(dir),
-			Path:     dir,
-			CPACount: len(files),
-			SSOFiles: ssoN,
-			ModTime:  mt,
+			ID: id, Path: dir, Plugin: pluginID, Status: status, Phase: string(snapshot.Phase),
+			PhaseDetail: snapshot.PhaseDetail, Error: snapshot.Error, Target: snapshot.Target,
+			Done: snapshot.Done, FailCount: snapshot.FailCount, CPACount: len(files), SSOFiles: ssoN,
+			ImportedCount: importedCount, StartedAt: snapshot.StartedAt, UpdatedAt: snapshot.UpdatedAt,
+			ModTime: modTime, DurationMS: durationMS, AverageAccountMS: averageAccountMS,
+			AccountMetricCount: accountMetricCount,
 		})
 	}
 	writeJSON(w, 200, map[string]any{
-		"ok":          true,
-		"runs":        out,
-		"total":       total,
-		"page":        page,
-		"page_size":   pageSize,
-		"total_pages": pageCount(total, pageSize),
+		"ok": true, "runs": out, "total": total, "page": page,
+		"page_size": pageSize, "total_pages": pageCount(total, pageSize),
 	})
 }
 
@@ -1782,6 +1906,8 @@ func contentTypeFor(path string) string {
 		return "image/svg+xml"
 	case strings.HasSuffix(path, ".png"):
 		return "image/png"
+	case strings.HasSuffix(path, ".ico"):
+		return "image/x-icon"
 	case strings.HasSuffix(path, ".woff2"):
 		return "font/woff2"
 	case strings.HasSuffix(path, ".txt"):

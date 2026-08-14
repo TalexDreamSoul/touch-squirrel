@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // EnabledFile is the on-disk enable map under the squirrel home.
@@ -23,11 +24,28 @@ type EnabledEntry struct {
 
 // Installed is a discovered plugin instance on disk.
 type Installed struct {
-	Manifest Manifest
-	Root     string
-	Enabled  bool
-	InTree   bool
+	Manifest       Manifest
+	Root           string
+	Enabled        bool
+	InTree         bool
+	RepositoryID   string
+	RepositoryName string
+	RepositoryURL  string
+	Official       bool
 }
+
+// InstallSource records the trusted repository provenance of an installation.
+type InstallSource struct {
+	RepositoryID   string `json:"repository_id"`
+	RepositoryName string `json:"repository_name"`
+	RepositoryURL  string `json:"repository_url"`
+}
+
+type installSourcesFile struct {
+	Plugins map[string]InstallSource `json:"plugins"`
+}
+
+const installSourceFile = ".source.json"
 
 // Manager discovers in-tree + installed plugins and tracks enable state.
 type Manager struct {
@@ -37,6 +55,8 @@ type Manager struct {
 	EnabledPath string
 	// InTreeRoot is optional repo plugins/ directory for first-party packs.
 	InTreeRoot string
+	mu         sync.Mutex
+	writeJSON  func(string, any, os.FileMode) error
 }
 
 // NewManager builds a manager for the given home paths and optional in-tree root.
@@ -45,11 +65,18 @@ func NewManager(homePlugins, enabledPath, inTreeRoot string) *Manager {
 		HomePlugins: homePlugins,
 		EnabledPath: enabledPath,
 		InTreeRoot:  inTreeRoot,
+		writeJSON:   writeJSONAtomic,
 	}
 }
 
 // List returns installed + in-tree plugins (one row per id, preferred source wins).
 func (m *Manager) List() ([]Installed, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.listLocked()
+}
+
+func (m *Manager) listLocked() ([]Installed, error) {
 	byID := map[string]Installed{}
 
 	// in-tree first (lower priority if home install exists)
@@ -78,6 +105,10 @@ func (m *Manager) List() ([]Installed, error) {
 	if err != nil {
 		return nil, err
 	}
+	sources, err := m.loadInstallSources()
+	if err != nil {
+		return nil, err
+	}
 	out := make([]Installed, 0, len(byID))
 	for id, it := range byID {
 		if e, ok := en.Plugins[id]; ok {
@@ -99,6 +130,7 @@ func (m *Manager) List() ([]Installed, error) {
 			// first-party in-tree defaults to enabled for bootstrap UX
 			it.Enabled = true
 		}
+		applyInstallSource(&it, sources)
 		out = append(out, it)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -109,7 +141,13 @@ func (m *Manager) List() ([]Installed, error) {
 
 // Get returns one plugin by id.
 func (m *Manager) Get(id string) (Installed, error) {
-	list, err := m.List()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.getLocked(id)
+}
+
+func (m *Manager) getLocked(id string) (Installed, error) {
+	list, err := m.listLocked()
 	if err != nil {
 		return Installed{}, err
 	}
@@ -123,7 +161,9 @@ func (m *Manager) Get(id string) (Installed, error) {
 
 // Enable marks a plugin enabled (and records its current version).
 func (m *Manager) Enable(id string) error {
-	it, err := m.Get(id)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	it, err := m.getLocked(id)
 	if err != nil {
 		return err
 	}
@@ -140,7 +180,9 @@ func (m *Manager) Enable(id string) error {
 
 // Disable marks a plugin disabled.
 func (m *Manager) Disable(id string) error {
-	it, err := m.Get(id)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	it, err := m.getLocked(id)
 	if err != nil {
 		return err
 	}
@@ -158,6 +200,22 @@ func (m *Manager) Disable(id string) error {
 // InstallPath copies a local plugin directory into home plugins store.
 // Trust model v0: any local path is allowed.
 func (m *Manager) InstallPath(src string) (Installed, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.installPathLocked(src, nil)
+}
+
+// InstallRepositoryPath installs a cached market plugin with trusted provenance.
+func (m *Manager) InstallRepositoryPath(src string, source InstallSource) (Installed, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if strings.TrimSpace(source.RepositoryID) == "" || strings.TrimSpace(source.RepositoryURL) == "" {
+		return Installed{}, fmt.Errorf("repository provenance is required")
+	}
+	return m.installPathLocked(src, &source)
+}
+
+func (m *Manager) installPathLocked(src string, source *InstallSource) (Installed, error) {
 	src, err := filepath.Abs(src)
 	if err != nil {
 		return Installed{}, err
@@ -177,27 +235,96 @@ func (m *Manager) InstallPath(src string) (Installed, error) {
 	if m.HomePlugins == "" {
 		return Installed{}, fmt.Errorf("home plugins dir not configured")
 	}
-	dst := filepath.Join(m.HomePlugins, man.ID, man.Version)
-	if err := os.RemoveAll(dst); err != nil {
+	parent := filepath.Join(m.HomePlugins, man.ID)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return Installed{}, err
 	}
-	if err := copyDir(src, dst); err != nil {
+	dst := filepath.Join(parent, man.Version)
+	staging, err := os.MkdirTemp(parent, ".install-")
+	if err != nil {
 		return Installed{}, err
 	}
-	man.Path = dst
-	man.Source = "installed"
+	if err := os.Remove(staging); err != nil {
+		return Installed{}, err
+	}
+	defer os.RemoveAll(staging)
+	if err := copyDir(src, staging); err != nil {
+		return Installed{}, err
+	}
+	// Provenance is host-owned metadata and is never trusted from plugin contents.
+	if err := os.Remove(filepath.Join(staging, installSourceFile)); err != nil && !os.IsNotExist(err) {
+		return Installed{}, err
+	}
+	sources, err := m.loadInstallSources()
+	if err != nil {
+		return Installed{}, err
+	}
 	en, err := m.loadEnabled()
 	if err != nil {
 		return Installed{}, err
 	}
+	sourceKey := installSourceKey(man.ID, man.Version)
+	previousSource, hadPreviousSource := sources.Plugins[sourceKey]
+
+	backup := filepath.Join(parent, ".previous-"+man.Version)
+	_ = os.RemoveAll(backup)
+	hadPreviousInstall := false
+	if _, statErr := os.Stat(dst); statErr == nil {
+		hadPreviousInstall = true
+		if err := os.Rename(dst, backup); err != nil {
+			return Installed{}, err
+		}
+	}
+	rollbackDirectory := func() error {
+		if err := os.RemoveAll(dst); err != nil {
+			return err
+		}
+		if hadPreviousInstall {
+			return os.Rename(backup, dst)
+		}
+		return nil
+	}
+	if err := os.Rename(staging, dst); err != nil {
+		_ = rollbackDirectory()
+		return Installed{}, err
+	}
+	man.Path = dst
+	man.Source = "installed"
+
+	if source == nil {
+		delete(sources.Plugins, sourceKey)
+	} else {
+		sources.Plugins[sourceKey] = *source
+	}
+	if err := m.saveInstallSources(sources); err != nil {
+		if rollbackErr := rollbackDirectory(); rollbackErr != nil {
+			return Installed{}, fmt.Errorf("save plugin provenance: %w (directory rollback failed: %v)", err, rollbackErr)
+		}
+		return Installed{}, err
+	}
+
 	if en.Plugins == nil {
 		en.Plugins = map[string]EnabledEntry{}
 	}
 	en.Plugins[man.ID] = EnabledEntry{Version: man.Version, Enabled: true}
 	if err := m.saveEnabled(en); err != nil {
+		if hadPreviousSource {
+			sources.Plugins[sourceKey] = previousSource
+		} else {
+			delete(sources.Plugins, sourceKey)
+		}
+		sourceRollbackErr := m.saveInstallSources(sources)
+		directoryRollbackErr := rollbackDirectory()
+		if sourceRollbackErr != nil || directoryRollbackErr != nil {
+			return Installed{}, fmt.Errorf("save plugin enable state: %w (source rollback: %v; directory rollback: %v)", err, sourceRollbackErr, directoryRollbackErr)
+		}
 		return Installed{}, err
 	}
-	return Installed{Manifest: man, Root: dst, Enabled: true, InTree: false}, nil
+	_ = os.RemoveAll(backup)
+
+	installed := Installed{Manifest: man, Root: dst, Enabled: true, InTree: false}
+	applyInstallSource(&installed, sources)
+	return installed, nil
 }
 
 func (m *Manager) loadEnabled() (EnabledFile, error) {
@@ -229,15 +356,7 @@ func (m *Manager) saveEnabled(en EnabledFile) error {
 	if m.EnabledPath == "" {
 		return fmt.Errorf("enabled path not configured")
 	}
-	if err := os.MkdirAll(filepath.Dir(m.EnabledPath), 0o700); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(en, "", "  ")
-	if err != nil {
-		return err
-	}
-	b = append(b, '\n')
-	return os.WriteFile(m.EnabledPath, b, 0o600)
+	return m.writeState(m.EnabledPath, en, 0o600)
 }
 
 // scanPluginTree reads plugins/<id>/plugin.json (in-tree layout).
@@ -264,7 +383,8 @@ func scanPluginTree(root string, inTree bool) ([]Installed, error) {
 		if man.Source == "" && inTree {
 			man.Source = "in-tree"
 		}
-		out = append(out, Installed{Manifest: man, Root: dir, InTree: inTree})
+		installed := Installed{Manifest: man, Root: dir, InTree: inTree}
+		out = append(out, installed)
 	}
 	return out, nil
 }
@@ -291,7 +411,8 @@ func scanVersionedPlugins(root string) ([]Installed, error) {
 			if man.Source == "" {
 				man.Source = "installed"
 			}
-			out = append(out, Installed{Manifest: man, Root: idDir, InTree: false})
+			installed := Installed{Manifest: man, Root: idDir, InTree: false}
+			out = append(out, installed)
 			continue
 		}
 		verEntries, err := os.ReadDir(idDir)
@@ -327,6 +448,72 @@ func scanVersionedPlugins(root string) ([]Installed, error) {
 		}
 	}
 	return out, nil
+}
+
+func (m *Manager) loadInstallSources() (installSourcesFile, error) {
+	sources := installSourcesFile{Plugins: map[string]InstallSource{}}
+	path := m.installSourcesPath()
+	if path == "" {
+		return sources, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return sources, nil
+		}
+		return sources, err
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return sources, nil
+	}
+	if err := json.Unmarshal(data, &sources); err != nil {
+		return sources, fmt.Errorf("plugin-sources.json: %w", err)
+	}
+	if sources.Plugins == nil {
+		sources.Plugins = map[string]InstallSource{}
+	}
+	return sources, nil
+}
+
+func (m *Manager) saveInstallSources(sources installSourcesFile) error {
+	path := m.installSourcesPath()
+	if path == "" {
+		return fmt.Errorf("plugin sources path not configured")
+	}
+	return m.writeState(path, sources, 0o600)
+}
+
+func (m *Manager) writeState(path string, value any, mode os.FileMode) error {
+	if m.writeJSON == nil {
+		return writeJSONAtomic(path, value, mode)
+	}
+	return m.writeJSON(path, value, mode)
+}
+
+func (m *Manager) installSourcesPath() string {
+	if m.EnabledPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(m.EnabledPath), "plugin-sources.json")
+}
+
+func installSourceKey(id, version string) string {
+	return id + "@" + version
+}
+
+func applyInstallSource(installed *Installed, sources installSourcesFile) {
+	if installed.InTree {
+		return
+	}
+	source, ok := sources.Plugins[installSourceKey(installed.Manifest.ID, installed.Manifest.Version)]
+	if !ok {
+		return
+	}
+	installed.RepositoryID = source.RepositoryID
+	installed.RepositoryName = source.RepositoryName
+	installed.RepositoryURL = source.RepositoryURL
+	officialURL, err := currentOfficialRepositoryURL()
+	installed.Official = err == nil && source.RepositoryID == OfficialRepositoryID && source.RepositoryURL == officialURL
 }
 
 func fileExists(p string) bool {

@@ -4,11 +4,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
+	"regexp"
 	"strings"
 )
 
 // HostAPI is the contract version this host understands.
 const HostAPI = "0.1"
+
+var (
+	manifestIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	manifestVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$`)
+)
 
 // Kind identifies a plugin role.
 type Kind string
@@ -84,8 +91,14 @@ func (m Manifest) Validate() error {
 	if strings.TrimSpace(m.ID) == "" {
 		return fmt.Errorf("plugin id required")
 	}
+	if !manifestIDPattern.MatchString(m.ID) {
+		return fmt.Errorf("plugin id must contain only letters, numbers, dot, underscore, or hyphen")
+	}
 	if strings.TrimSpace(m.Version) == "" {
 		return fmt.Errorf("plugin %s: version required", m.ID)
+	}
+	if !manifestVersionPattern.MatchString(m.Version) {
+		return fmt.Errorf("plugin %s: invalid version", m.ID)
 	}
 	if len(m.Kind) == 0 {
 		return fmt.Errorf("plugin %s: kind required", m.ID)
@@ -105,8 +118,20 @@ func (m Manifest) Validate() error {
 	if strings.TrimSpace(m.Entry.Go) == "" && strings.TrimSpace(m.Entry.JS) == "" && strings.TrimSpace(m.Entry.Bridge) == "" {
 		return fmt.Errorf("plugin %s: entry.go, entry.js or entry.bridge required", m.ID)
 	}
+	for _, entry := range []string{m.Entry.Go, m.Entry.JS, m.Entry.Bridge} {
+		if entry == "" {
+			continue
+		}
+		clean := path.Clean(entry)
+		if strings.Contains(entry, `\`) || path.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+			return fmt.Errorf("plugin %s: entry path must stay inside the plugin directory", m.ID)
+		}
+	}
 	if strings.TrimSpace(m.HostAPI) == "" {
 		return fmt.Errorf("plugin %s: hostApi required", m.ID)
+	}
+	if m.HostAPI != HostAPI {
+		return fmt.Errorf("plugin %s: hostApi %s is incompatible with host %s", m.ID, m.HostAPI, HostAPI)
 	}
 	return nil
 }
