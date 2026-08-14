@@ -18,8 +18,8 @@ test("defaults to the web manager", () => {
   assert.deepEqual(commandArgs(["doctor"]), ["doctor"]);
 });
 
-test("reads the packaged launcher version", async () => {
-  assert.equal(await packageVersion(), "0.2.0");
+test("reads a valid packaged launcher version", async () => {
+  assert.match(await packageVersion(), /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
 });
 
 test("maps supported release assets", () => {
