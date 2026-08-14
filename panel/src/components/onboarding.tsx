@@ -7,7 +7,7 @@ import { Button } from "@cloudflare/kumo";
 import "./onboarding.css";
 
 const SEEN_KEY = "squirrel-onboarding-v1";
-const STRIPS = 14;
+const STRIPS = 18;
 
 export function hasSeenOnboarding(): boolean {
   if (typeof window === "undefined") return true;
@@ -82,6 +82,68 @@ const FORMATIONS = {
 } satisfies Record<string, Pose[]>;
 
 type Formation = keyof typeof FORMATIONS;
+
+/** 持续飞入的货：从画面下方各处飞来，落到垛上被"收进去" */
+type Flyer = {
+  fx: string;
+  fz: string;
+  fa: number;
+  fb: number;
+  tx: number;
+  ty: number;
+  tz: number;
+  size: number;
+  dur: number;
+  delay: number;
+  brand?: boolean;
+};
+
+const FLYERS: Flyer[] = [
+  { fx: "-320px", fz: "-180px", fa: -50, fb: 40, tx: -1.02, ty: 1.0, tz: 0, size: 0.9, dur: 4.2, delay: 0 },
+  { fx: "300px", fz: "140px", fa: 40, fb: -55, tx: 0.51, ty: 0, tz: 0, size: 0.8, dur: 4.6, delay: 0.6 },
+  { fx: "-180px", fz: "200px", fa: 55, fb: 30, tx: 0, ty: -1.0, tz: 0, size: 0.85, dur: 4.4, delay: 1.2, brand: true },
+  { fx: "380px", fz: "-120px", fa: -35, fb: -40, tx: 1.02, ty: 1.0, tz: 0, size: 0.95, dur: 4.8, delay: 1.8 },
+  { fx: "-400px", fz: "60px", fa: 45, fb: 50, tx: -0.51, ty: 0, tz: 0, size: 0.75, dur: 4.3, delay: 2.4 },
+  { fx: "140px", fz: "-220px", fa: -55, fb: 35, tx: 0, ty: 1.0, tz: 0, size: 0.88, dur: 4.7, delay: 3.0 },
+];
+
+const CUBE_FACES = ["front", "back", "right", "left", "top", "bottom"] as const;
+
+/**
+ * 每块货对应一个真实的注册插件（见 plugins/ 目录）。
+ * 图标取自 @lobehub/icons-static-svg 的单色版本，用 mask 上色。
+ * Outlook 用微软标记，图标集里没有单独的 Outlook 版本。
+ */
+const SERVICES = [
+  "openai",
+  "claudecode",
+  "github",
+  "xai",
+  "microsoft",
+] as const;
+
+function CubeFaces({ logo, mark }: { logo?: string; mark?: boolean }) {
+  return (
+    <>
+      {CUBE_FACES.map((f) => {
+        const showFace = f === "front" || f === "back";
+        return (
+          <div key={f} className={`sq-ob__face sq-ob__face--${f}`}>
+            {mark && showFace ? <span className="sq-ob__cube-mark" /> : null}
+            {logo && !mark && showFace ? (
+              <span
+                className="sq-ob__logo"
+                style={
+                  { "--logo": `url(/brand/services/${logo}.svg)` } as React.CSSProperties
+                }
+              />
+            ) : null}
+          </div>
+        );
+      })}
+    </>
+  );
+}
 
 type Step = {
   eyebrow: string;
@@ -200,6 +262,29 @@ export function Onboarding() {
     };
   }, [open]);
 
+  // 指针视差：直接写 CSS 变量，不触发 React 重渲染
+  useEffect(() => {
+    if (!open || prefersReducedMotion()) return;
+    const root = rootRef.current;
+    if (!root) return;
+    const onMove = (e: PointerEvent) => {
+      const x = (e.clientX / window.innerWidth) * 2 - 1;
+      const y = (e.clientY / window.innerHeight) * 2 - 1;
+      root.style.setProperty("--px", x.toFixed(3));
+      root.style.setProperty("--py", y.toFixed(3));
+    };
+    const onLeave = () => {
+      root.style.setProperty("--px", "0");
+      root.style.setProperty("--py", "0");
+    };
+    window.addEventListener("pointermove", onMove, { passive: true });
+    window.addEventListener("pointerleave", onLeave);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerleave", onLeave);
+    };
+  }, [open]);
+
   // Esc 关闭、左右键翻页、Tab 圈在弹层内
   useEffect(() => {
     if (!open) return;
@@ -312,40 +397,110 @@ export function Onboarding() {
               </Button>
             </div>
 
+            <div className="sq-ob__sweep" aria-hidden />
+
+
             <div className="sq-ob__viewport" aria-hidden>
-              <div className="sq-ob__scene">
-                <div
-                  className="sq-ob__ground"
-                  style={{ opacity: started && current.formation === "focus" ? 0.3 : 1 }}
-                />
-                {poses.map((p, i) => (
-                  <div
-                    key={i}
-                    className="sq-ob__cube"
-                    data-brand={i === poses.length - 1}
-                    style={
-                      {
-                        "--i": i,
-                        "--x": p.x,
-                        "--y": p.y,
-                        "--z": `${p.z}px`,
-                        "--rx": `${p.rx}deg`,
-                        "--ry": `${p.ry}deg`,
-                        "--k": p.k,
-                        "--o": p.o,
-                        "--s": 1,
-                      } as React.CSSProperties
-                    }
-                  >
-                    <div className="sq-ob__face sq-ob__face--front" />
-                    <div className="sq-ob__face sq-ob__face--back" />
-                    <div className="sq-ob__face sq-ob__face--right" />
-                    <div className="sq-ob__face sq-ob__face--left" />
-                    <div className="sq-ob__face sq-ob__face--top" />
-                    <div className="sq-ob__face sq-ob__face--bottom" />
+              <div className="sq-ob__aura" />
+              <div className="sq-ob__halo" />
+              <div className="sq-ob__orbit">
+                <div className="sq-ob__scene">
+                  <div className="sq-ob__grid" />
+                  <div className="sq-ob__floor" />
+
+                  <div className="sq-ob__mirror">
+                    {poses.map((p, i) => (
+                      <div
+                        key={`mirror-${i}`}
+                        className="sq-ob__cube"
+                        data-brand={i === poses.length - 1}
+                        style={
+                          {
+                            "--i": i,
+                            "--x": p.x,
+                            "--y": p.y,
+                            "--z": `${p.z}px`,
+                            "--rx": `${p.rx}deg`,
+                            "--ry": `${p.ry}deg`,
+                            "--k": p.k,
+                            "--o": p.o,
+                            "--s": 1,
+                          } as React.CSSProperties
+                        }
+                      >
+                        <CubeFaces logo={SERVICES[i]} mark={i === poses.length - 1} />
+                      </div>
+                    ))}
                   </div>
-                ))}
+
+                  {poses.map((p, i) => (
+                    <div
+                      key={`shadow-${i}`}
+                      className="sq-ob__shadow"
+                      style={
+                        {
+                          "--i": i,
+                          "--x": p.x,
+                          "--z": `${p.z}px`,
+                          "--k": p.k,
+                          "--o": p.o,
+                        } as React.CSSProperties
+                      }
+                    />
+                  ))}
+
+                  {poses.map((p, i) => (
+                    <div
+                      key={i}
+                      className="sq-ob__cube"
+                      data-brand={i === poses.length - 1}
+                      style={
+                        {
+                          "--i": i,
+                          "--x": p.x,
+                          "--y": p.y,
+                          "--z": `${p.z}px`,
+                          "--rx": `${p.rx}deg`,
+                          "--ry": `${p.ry}deg`,
+                          "--k": p.k,
+                          "--o": p.o,
+                          "--s": 1,
+                        } as React.CSSProperties
+                      }
+                    >
+                      <CubeFaces logo={SERVICES[i]} mark={i === poses.length - 1} />
+                    </div>
+                  ))}
+
+                  {/* 只在「囤」这一步跑进货流，后面两步讲的是别的事 */}
+                  {started && step === 0
+                    ? FLYERS.map((f, i) => (
+                        <div
+                          key={`flyer-${i}`}
+                          className="sq-ob__flyer"
+                          data-brand={f.brand ? "true" : "false"}
+                          style={
+                            {
+                              "--fx": f.fx,
+                              "--fz": f.fz,
+                              "--fa": `${f.fa}deg`,
+                              "--fb": `${f.fb}deg`,
+                              "--tx": f.tx,
+                              "--ty": f.ty,
+                              "--tz": `${f.tz}px`,
+                              "--s": f.size,
+                              "--dur": `${f.dur}s`,
+                              "--fd": `${f.delay}s`,
+                            } as React.CSSProperties
+                          }
+                        >
+                          <CubeFaces logo={SERVICES[i % SERVICES.length]} mark={f.brand} />
+                        </div>
+                      ))
+                    : null}
+                </div>
               </div>
+              <div className="sq-ob__fade" />
             </div>
 
             <div className="sq-ob__copy">

@@ -11,7 +11,12 @@
   --sq-cube: var(--color-kumo-neutral-750, #3f3f46);
 
   --sq-ease: cubic-bezier(0.16, 1, 0.3, 1);
-  --sq-u: 54px;
+  --sq-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --sq-u: 58px;
+
+  /* 指针视差，由 JS 写入，范围 -1 ~ 1 */
+  --px: 0;
+  --py: 0;
 
   position: fixed;
   inset: 0;
@@ -67,9 +72,9 @@
 
 .sq-ob__stage {
   position: relative;
-  width: min(880px, 100%);
+  width: min(920px, 100%);
   transform-style: preserve-3d;
-  animation: sq-rise 1050ms var(--sq-ease) both;
+  animation: sq-rise 1150ms var(--sq-ease) both;
   will-change: transform, opacity;
 }
 
@@ -83,10 +88,13 @@
 @keyframes sq-rise {
   0% {
     opacity: 0;
-    transform: translate3d(0, 62vh, -460px) rotateX(54deg) scale(0.9);
+    transform: translate3d(0, 66vh, -520px) rotateX(58deg) scale(0.88);
   }
   60% {
     opacity: 1;
+  }
+  88% {
+    transform: translate3d(0, -10px, 0) rotateX(-1.4deg) scale(1.006);
   }
   100% {
     opacity: 1;
@@ -112,16 +120,16 @@
   background: var(--sq-surface);
   transform-origin: 50% var(--origin);
   backface-visibility: hidden;
-  animation: sq-unfold 900ms var(--sq-ease) both;
-  animation-delay: calc(var(--d) * 26ms);
+  animation: sq-unfold 960ms var(--sq-ease) both;
+  animation-delay: calc(var(--d) * 24ms);
 }
 
 .sq-ob__strip:first-child {
-  border-radius: 24px 24px 0 0;
+  border-radius: 26px 26px 0 0;
 }
 
 .sq-ob__strip:last-child {
-  border-radius: 0 0 24px 24px;
+  border-radius: 0 0 26px 26px;
 }
 
 /* 相邻折面一明一暗，折痕才看得出来；收尾时整层褪掉，静止后不留痕 */
@@ -131,18 +139,18 @@
   inset: 0;
   background: linear-gradient(
     180deg,
-    color-mix(in oklab, var(--sq-strong) 44%, transparent),
+    color-mix(in oklab, var(--sq-strong) 48%, transparent),
     color-mix(in oklab, var(--sq-strong) 4%, transparent)
   );
-  animation: sq-fade-out 900ms var(--sq-ease) both;
-  animation-delay: calc(var(--d) * 26ms);
+  animation: sq-fade-out 960ms var(--sq-ease) both;
+  animation-delay: calc(var(--d) * 24ms);
 }
 
 .sq-ob__strip:nth-child(even)::after {
   background: linear-gradient(
     180deg,
     color-mix(in oklab, var(--sq-strong) 2%, transparent),
-    color-mix(in oklab, var(--sq-strong) 36%, transparent)
+    color-mix(in oklab, var(--sq-strong) 40%, transparent)
   );
 }
 
@@ -160,7 +168,7 @@
 .sq-ob__crumple {
   position: absolute;
   inset: 0;
-  border-radius: 24px;
+  border-radius: 26px;
   transform: translateZ(3px);
   pointer-events: none;
   filter: url(#sq-crumple) drop-shadow(0 30px 60px rgba(0, 0, 0, 0.4));
@@ -172,7 +180,7 @@
       transparent 64%
     ),
     var(--sq-surface);
-  animation: sq-crumple-out 1000ms ease-out both;
+  animation: sq-crumple-out 1080ms ease-out both;
 }
 
 @keyframes sq-crumple-out {
@@ -194,8 +202,8 @@
   display: grid;
   grid-template-rows: auto 1fr auto;
   gap: 0;
-  min-height: 520px;
-  border-radius: 24px;
+  min-height: 560px;
+  border-radius: 26px;
   border: 1px solid var(--sq-line);
   overflow: hidden;
   box-shadow: 0 28px 68px rgba(0, 0, 0, 0.34);
@@ -215,79 +223,238 @@
   }
 }
 
+/* 「跳过」压在深色舞台上，得把 Kumo 的默认文字色顶掉 */
 .sq-ob__skip {
   position: absolute;
   top: 14px;
   right: 14px;
-  z-index: 3;
+  z-index: 4;
 }
 
-/* 立方体场景 */
+.sq-ob__skip button {
+  color: light-dark(rgba(28, 32, 44, 0.62), rgba(255, 255, 255, 0.78)) !important;
+}
+
+.sq-ob__skip button:hover {
+  color: light-dark(#11131a, #ffffff) !important;
+  background: light-dark(rgba(20, 24, 34, 0.07), rgba(255, 255, 255, 0.14)) !important;
+}
+
+/* 落定后扫过卡片的一道高光 */
+.sq-ob__sweep {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+  background: linear-gradient(
+    104deg,
+    transparent 34%,
+    rgba(255, 255, 255, 0.85) 47%,
+    transparent 60%
+  );
+  animation: sq-sweep 1500ms cubic-bezier(0.3, 0, 0.2, 1) 980ms both;
+}
+
+@keyframes sq-sweep {
+  from {
+    transform: translateX(-115%);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(115%);
+    opacity: 0;
+  }
+}
+
+/* ---------- 3D 舞台 ---------- */
+
+/*
+ * 3D 区是卡片里"嵌进去的一块展示屏"——留白 + 圆角 + 内描边。
+ * 配色全部走 light-dark()，跟随 ThemeProvider 写在根节点的 color-scheme：
+ * 浅色是亮的影棚，深色才是暗场，两边都不会出现半白半黑的错位。
+ */
 .sq-ob__viewport {
+  --stage-cube: light-dark(#b4bbcc, #838a9c);
+  --stage-line: light-dark(rgba(20, 24, 34, 0.16), rgba(255, 255, 255, 0.16));
+  --stage-ink: light-dark(#232838, #eef1f7);
+  --stage-edge: light-dark(rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.3));
+  --stage-pool: light-dark(rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.14));
+  --stage-drop: light-dark(rgba(34, 40, 56, 0.36), rgba(0, 0, 0, 0.62));
+  --stage-far: light-dark(#e6eaf2, #101116);
+
   position: relative;
-  height: 300px;
-  perspective: 1000px;
-  perspective-origin: 50% 46%;
+  height: 320px;
+  margin: 14px;
+  border-radius: 18px;
+  perspective: 900px;
+  perspective-origin: 50% 44%;
   overflow: hidden;
-  background:
-    radial-gradient(
-      120% 80% at 50% 8%,
-      color-mix(in oklab, var(--sq-brand) 9%, transparent),
-      transparent 62%
-    ),
-    var(--sq-canvas);
+  background: light-dark(
+    radial-gradient(132% 104% at 50% -12%, #ffffff 0%, #e7ebf3 54%, #ccd3e0 100%),
+    radial-gradient(132% 104% at 50% -12%, #363a45 0%, #1d2027 52%, #101116 100%)
+  );
+  box-shadow:
+    inset 0 0 0 1px light-dark(rgba(24, 28, 40, 0.09), rgba(255, 255, 255, 0.08)),
+    0 10px 28px light-dark(rgba(30, 36, 50, 0.12), rgba(0, 0, 0, 0.28));
+}
+
+/* 环境光：一层缓慢漂移的柔光，给场景一个光源方向 */
+.sq-ob__aura {
+  position: absolute;
+  inset: -25%;
+  background: radial-gradient(
+    36% 44% at 42% 16%,
+    color-mix(in oklab, var(--sq-brand) 34%, transparent),
+    transparent 70%
+  );
+  filter: blur(38px);
+  animation: sq-aura 24s ease-in-out infinite alternate;
+}
+
+/* 品牌立方体顶端的辉光。放在 3D 场景外，避免为了朝向相机去反算旋转 */
+.sq-ob__halo {
+  position: absolute;
+  left: 50%;
+  top: 30%;
+  width: 300px;
+  height: 300px;
+  margin: -150px 0 0 -150px;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in oklab, var(--sq-brand) 58%, transparent),
+    transparent 68%
+  );
+  opacity: 0.55;
+  animation: sq-halo 5.5s ease-in-out infinite alternate;
+}
+
+@keyframes sq-halo {
+  from {
+    opacity: 0.4;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 0.68;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes sq-aura {
+  from {
+    transform: translate3d(-4%, -2%, 0) scale(1);
+  }
+  to {
+    transform: translate3d(6%, 3%, 0) scale(1.12);
+  }
+}
+
+/* 空转在外层，指针视差在内层，两个 transform 才不会互相覆盖 */
+.sq-ob__orbit {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  animation: sq-orbit 20s ease-in-out infinite alternate;
+}
+
+@keyframes sq-orbit {
+  from {
+    transform: rotateY(-13deg);
+  }
+  to {
+    transform: rotateY(13deg);
+  }
 }
 
 .sq-ob__scene {
   position: absolute;
   inset: 0;
   transform-style: preserve-3d;
-  animation: sq-orbit 18s ease-in-out infinite alternate;
+  transform: rotateX(calc(-12deg + var(--py) * 7deg))
+    rotateY(calc(var(--px) * 15deg));
+  transition: transform 520ms var(--sq-spring);
 }
 
-@keyframes sq-orbit {
-  from {
-    transform: rotateX(-13deg) rotateY(-21deg);
-  }
-  to {
-    transform: rotateX(-9deg) rotateY(21deg);
-  }
-}
+/* ---------- 地面 ---------- */
 
-/* 地面接触阴影 */
-.sq-ob__ground {
+/* 透视网格：3D 空间感主要靠它，所以要淡、要快速消失在远处 */
+.sq-ob__grid {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: calc(var(--sq-u) * 4.4);
-  height: calc(var(--sq-u) * 1.5);
+  width: 1300px;
+  height: 900px;
+  margin: -450px 0 0 -650px;
+  transform: translate3d(0, calc(var(--sq-u) * 1.52), 0) rotateX(90deg);
+  background:
+    repeating-linear-gradient(0deg, var(--stage-line) 0 1px, transparent 1px 58px),
+    repeating-linear-gradient(90deg, var(--stage-line) 0 1px, transparent 1px 58px);
+  -webkit-mask-image: radial-gradient(closest-side, #000 4%, transparent 52%);
+  mask-image: radial-gradient(closest-side, #000 4%, transparent 52%);
+}
+
+/* 地面光池：让垛看起来是"放"在被照亮的一块地面上 */
+.sq-ob__floor {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--sq-u) * 11);
+  height: calc(var(--sq-u) * 11);
+  margin: calc(var(--sq-u) * -5.5);
   border-radius: 50%;
-  background: radial-gradient(
-    closest-side,
-    color-mix(in oklab, var(--sq-strong) 26%, transparent),
-    transparent
-  );
-  transform: translate3d(-50%, calc(var(--sq-u) * 1.1), 0) rotateX(90deg);
-  filter: blur(6px);
-  transition: opacity 1.05s var(--sq-ease);
+  transform: translate3d(0, calc(var(--sq-u) * 1.51), 0) rotateX(90deg);
+  background: radial-gradient(closest-side, var(--stage-pool), transparent 66%);
 }
 
-/* ---------- 立方体 ---------- */
+/*
+ * 倒影：把整组立方体沿地面翻过去。地面在 y = 1.51u，
+ * 所以镜像是 y' = 3.02u - y，即先 scaleY(-1) 再下移 3.02u。
+ * scaleY(-1) 会翻转绕序，必须放开 backface-visibility，否则面全部消失。
+ */
+.sq-ob__mirror {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transform: translate3d(0, calc(var(--sq-u) * 3.02), 0) scaleY(-1);
+  opacity: 0.34;
+}
 
-.sq-ob__cube {
+.sq-ob__mirror .sq-ob__face {
+  backface-visibility: visible;
+  box-shadow: none;
+}
+
+/* 倒影的衰减：用 2D 渐变把远处压回舞台底色，比给 3D 容器加 mask 安全 */
+.sq-ob__fade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent 70%,
+    color-mix(in oklab, var(--stage-far) 55%, transparent) 88%,
+    var(--stage-far) 100%
+  );
+}
+
+/* 每块立方体在地面上的接触阴影，跟着它一起走 */
+.sq-ob__shadow {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: calc(var(--sq-u) * var(--s, 1));
-  height: calc(var(--sq-u) * var(--s, 1));
-  margin: calc(var(--sq-u) * var(--s, 1) / -2);
-  transform-style: preserve-3d;
+  width: calc(var(--sq-u) * 1.7);
+  height: calc(var(--sq-u) * 1.7);
+  margin: calc(var(--sq-u) * -0.85);
+  border-radius: 50%;
+  background: radial-gradient(closest-side, var(--stage-drop), transparent 68%);
   transform: translate3d(
       calc(var(--sq-u) * var(--x)),
-      calc(var(--sq-u) * var(--y)),
+      calc(var(--sq-u) * 1.5),
       var(--z)
     )
-    rotateX(var(--rx)) rotateY(var(--ry)) scale(var(--k, 1));
+    rotateX(90deg) scale(var(--k, 1));
   opacity: var(--o, 1);
   transition:
     transform 1100ms var(--sq-ease),
@@ -295,52 +462,182 @@
   transition-delay: calc(var(--i) * 60ms);
 }
 
-.sq-ob__face {
+/* ---------- 立方体 ---------- */
+
+.sq-ob__cube,
+.sq-ob__flyer {
   position: absolute;
-  inset: 0;
-  background: var(--tone);
-  border: 1px solid color-mix(in oklab, var(--tone) 74%, black);
-  backface-visibility: hidden;
-}
-
-.sq-ob__cube[data-brand="true"] {
-  --tone-base: var(--sq-brand);
-}
-
-.sq-ob__cube {
-  --tone-base: var(--sq-cube);
+  left: 50%;
+  top: 50%;
+  width: calc(var(--sq-u) * var(--s, 1));
+  height: calc(var(--sq-u) * var(--s, 1));
+  margin: calc(var(--sq-u) * var(--s, 1) / -2);
+  transform-style: preserve-3d;
+  --tone-base: var(--stage-cube);
   --h: calc(var(--sq-u) * var(--s, 1) / 2);
 }
 
+/*
+ * 缩放必须用 scale3d：CSS 的 scale() 只作用于 X/Y，Z 轴不变，
+ * 缩放后立方体的深度就对不上宽高，看起来不是正方体。
+ */
+.sq-ob__cube {
+  transform: translate3d(
+      calc(var(--sq-u) * var(--x)),
+      calc(var(--sq-u) * var(--y)),
+      var(--z)
+    )
+    rotateX(var(--rx)) rotateY(var(--ry))
+    scale3d(var(--k, 1), var(--k, 1), var(--k, 1));
+  opacity: var(--o, 1);
+  transition:
+    transform 1100ms var(--sq-ease),
+    opacity 700ms ease-out;
+  transition-delay: calc(var(--i) * 60ms);
+}
+
+.sq-ob__cube[data-brand="true"],
+.sq-ob__flyer[data-brand="true"] {
+  --tone-base: var(--sq-brand);
+}
+
+/*
+ * 面的受光：每个面自带渐变而不是平涂，再加一条顶边高光。
+ * 平涂的立方体只有色块，加了梯度和高光才像有体积的实物。
+ */
+.sq-ob__face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  backface-visibility: hidden;
+  background: linear-gradient(
+    158deg,
+    color-mix(in oklab, var(--tone-base) 74%, white),
+    color-mix(in oklab, var(--tone-base) 98%, black)
+  );
+  box-shadow:
+    inset 0 1px 0 var(--stage-edge),
+    inset 0 0 0 1px color-mix(in oklab, var(--tone-base) 68%, black);
+}
+
+/* 一道窄的斜向镜面反光，让面看起来是有涂层的实物而不是色块 */
+.sq-ob__face::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    118deg,
+    transparent 26%,
+    color-mix(in oklab, #ffffff 34%, transparent) 42%,
+    transparent 54%
+  );
+}
+
 .sq-ob__face--front {
-  --tone: color-mix(in oklab, var(--tone-base) 92%, white);
   transform: translateZ(var(--h));
 }
+
+/* 服务标记：用 mask 上色，跟着主题走，不用替换素材 */
+.sq-ob__logo {
+  position: relative;
+  width: 46%;
+  height: 46%;
+  background: var(--stage-ink);
+  opacity: 0.82;
+  -webkit-mask: var(--logo) center / contain no-repeat;
+  mask: var(--logo) center / contain no-repeat;
+}
+
+/* 品牌那块保留彩色松鼠，不做单色处理 */
+.sq-ob__cube-mark {
+  position: relative;
+  width: 54%;
+  height: 54%;
+  border-radius: 22%;
+  background: url("/brand/squirrel-icon.png") center / contain no-repeat;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.32);
+}
 .sq-ob__face--back {
-  --tone: color-mix(in oklab, var(--tone-base) 78%, black);
+  background: linear-gradient(
+    158deg,
+    color-mix(in oklab, var(--tone-base) 88%, black),
+    color-mix(in oklab, var(--tone-base) 72%, black)
+  );
   transform: rotateY(180deg) translateZ(var(--h));
 }
 .sq-ob__face--right {
-  --tone: color-mix(in oklab, var(--tone-base) 84%, black);
+  background: linear-gradient(
+    158deg,
+    color-mix(in oklab, var(--tone-base) 96%, black),
+    color-mix(in oklab, var(--tone-base) 76%, black)
+  );
   transform: rotateY(90deg) translateZ(var(--h));
 }
 .sq-ob__face--left {
-  --tone: color-mix(in oklab, var(--tone-base) 70%, black);
+  background: linear-gradient(
+    158deg,
+    color-mix(in oklab, var(--tone-base) 86%, black),
+    color-mix(in oklab, var(--tone-base) 66%, black)
+  );
   transform: rotateY(-90deg) translateZ(var(--h));
 }
+/* 顶面朝光，最亮，并带一道斜向反光 */
 .sq-ob__face--top {
-  --tone: color-mix(in oklab, var(--tone-base) 62%, white);
+  background:
+    linear-gradient(
+      206deg,
+      color-mix(in oklab, #ffffff 42%, transparent),
+      transparent 58%
+    ),
+    linear-gradient(
+      158deg,
+      color-mix(in oklab, var(--tone-base) 48%, white),
+      color-mix(in oklab, var(--tone-base) 78%, white)
+    );
   transform: rotateX(90deg) translateZ(var(--h));
 }
 .sq-ob__face--bottom {
-  --tone: color-mix(in oklab, var(--tone-base) 60%, black);
+  background: color-mix(in oklab, var(--tone-base) 62%, black);
   transform: rotateX(-90deg) translateZ(var(--h));
+}
+
+/* ---------- 持续飞入的"进货流" ---------- */
+
+.sq-ob__flyer {
+  animation: sq-fly var(--dur) cubic-bezier(0.36, 0.02, 0.2, 1) infinite both;
+  animation-delay: var(--fd);
+}
+
+@keyframes sq-fly {
+  0% {
+    opacity: 0;
+    transform: translate3d(var(--fx), 360px, var(--fz)) rotateX(var(--fa))
+      rotateY(var(--fb)) scale3d(0.28, 0.28, 0.28);
+  }
+  14% {
+    opacity: 0.95;
+  }
+  72% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(
+        calc(var(--sq-u) * var(--tx)),
+        calc(var(--sq-u) * var(--ty)),
+        var(--tz)
+      )
+      rotateX(0deg) rotateY(0deg) scale3d(0.92, 0.92, 0.92);
+  }
 }
 
 /* ---------- 文案 ---------- */
 
 .sq-ob__copy {
-  padding: 32px 40px 8px;
+  padding: 14px 44px 8px;
   background: var(--sq-surface);
   perspective: 700px;
 }
@@ -378,7 +675,7 @@
   margin: 0 0 12px;
   /* 预留两行：标题行数在各步之间会变，不占住高度卡片会跳 */
   min-height: 2.36em;
-  font-size: clamp(28px, 4vw, 40px);
+  font-size: clamp(28px, 4vw, 42px);
   font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.18;
@@ -426,7 +723,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 20px 40px 28px;
+  padding: 20px 44px 28px;
   background: var(--sq-surface);
 }
 
@@ -518,16 +815,26 @@
   }
 
   .sq-ob__strip::after,
-  .sq-ob__crumple {
+  .sq-ob__crumple,
+  .sq-ob__sweep,
+  .sq-ob__flyer {
     display: none;
   }
 
-  .sq-ob__scene {
+  .sq-ob__orbit,
+  .sq-ob__aura,
+  .sq-ob__halo {
     animation: none;
-    transform: rotateX(-11deg) rotateY(-16deg);
+    transform: none;
   }
 
-  .sq-ob__cube {
+  .sq-ob__scene {
+    transform: rotateX(-12deg) rotateY(-14deg);
+    transition: none;
+  }
+
+  .sq-ob__cube,
+  .sq-ob__shadow {
     transition-duration: 1ms;
     transition-delay: 0ms;
   }
