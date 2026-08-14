@@ -287,8 +287,6 @@
   height: 320px;
   margin: 14px;
   border-radius: 18px;
-  perspective: 900px;
-  perspective-origin: 50% 44%;
   overflow: hidden;
   background: light-dark(
     radial-gradient(132% 104% at 50% -12%, #ffffff 0%, #e7ebf3 54%, #ccd3e0 100%),
@@ -351,6 +349,25 @@
   }
 }
 
+/*
+ * 水面层：透视从 viewport 挪到这里——波动滤镜必须和透视同层。
+ * 滤镜挂在再往里的任何 preserve-3d 层都会把 3D 拍扁；挂在 viewport 上
+ * 又会把背景和 halo 一起卷进隔离组。这里 transform-style 本来就是 flat
+ * （透视投影的终点），加滤镜不改变任何 3D 语义。
+ */
+.sq-ob__water {
+  position: absolute;
+  inset: 0;
+  perspective: 900px;
+  perspective-origin: 50% 44%;
+}
+
+/* 只在波动期间挂滤镜：常驻会让 20s 空转动画每帧都过一遍滤镜合成 */
+.sq-ob__water[data-ripple="true"] {
+  filter: url(#sq-ripple);
+  will-change: filter;
+}
+
 /* 空转在外层，指针视差在内层，两个 transform 才不会互相覆盖 */
 .sq-ob__orbit {
   position: absolute;
@@ -395,6 +412,53 @@
   mask-image: radial-gradient(closest-side, #000 4%, transparent 52%);
 }
 
+/*
+ * 换阵型时贴着地面扩散的水波环：细亮环从中心扩到远处并衰减，
+ * 和整体折射滤镜一起构成「一圈水波扫过去」。y 取 1.49u，
+ * 压在光池（1.51u）之上、避免和地面 z-fighting。
+ */
+.sq-ob__ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--sq-u) * 8);
+  height: calc(var(--sq-u) * 8);
+  margin: calc(var(--sq-u) * -4);
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(
+    closest-side,
+    transparent 56%,
+    color-mix(in oklab, var(--stage-edge) 85%, transparent) 67%,
+    transparent 76%
+  );
+  transform: translate3d(0, calc(var(--sq-u) * 1.49), 0) rotateX(90deg)
+    scale(0.14);
+  opacity: 0;
+  animation: sq-ring 1250ms var(--sq-ease) both;
+}
+
+.sq-ob__ring--late {
+  animation-duration: 1450ms;
+  animation-delay: 180ms;
+}
+
+@keyframes sq-ring {
+  0% {
+    transform: translate3d(0, calc(var(--sq-u) * 1.49), 0) rotateX(90deg)
+      scale(0.14);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate3d(0, calc(var(--sq-u) * 1.49), 0) rotateX(90deg)
+      scale(1);
+    opacity: 0;
+  }
+}
+
 /* 地面光池：让垛看起来是"放"在被照亮的一块地面上 */
 .sq-ob__floor {
   position: absolute;
@@ -418,12 +482,13 @@
   inset: 0;
   transform-style: preserve-3d;
   transform: translate3d(0, calc(var(--sq-u) * 3.02), 0) scaleY(-1);
-  opacity: 0.34;
 }
 
+/* 倒影的压暗同样只能落在面上：容器 opacity 会把整组倒影拍扁成纸片 */
 .sq-ob__mirror .sq-ob__face {
   backface-visibility: visible;
   box-shadow: none;
+  opacity: calc(var(--o, 1) * 0.34);
 }
 
 /* 倒影的衰减：用 2D 渐变把远处压回舞台底色，比给 3D 容器加 mask 安全 */
@@ -480,6 +545,10 @@
 /*
  * 缩放必须用 scale3d：CSS 的 scale() 只作用于 X/Y，Z 轴不变，
  * 缩放后立方体的深度就对不上宽高，看起来不是正方体。
+ *
+ * 这里绝不能写 opacity：容器 opacity < 1 会把 preserve-3d 强制退化成
+ * flat，立方体在整个淡入淡出期间瞬间拍扁、结束时又弹回 3D——就是切换时
+ * 的跳变。淡入淡出全部落在叶子面（.sq-ob__face）上。
  */
 .sq-ob__cube {
   transform: translate3d(
@@ -489,10 +558,7 @@
     )
     rotateX(var(--rx)) rotateY(var(--ry))
     scale3d(var(--k, 1), var(--k, 1), var(--k, 1));
-  opacity: var(--o, 1);
-  transition:
-    transform 1100ms var(--sq-ease),
-    opacity 700ms ease-out;
+  transition: transform 1100ms var(--sq-ease);
   transition-delay: calc(var(--i) * 60ms);
 }
 
@@ -512,6 +578,10 @@
   place-items: center;
   border-radius: 4px;
   backface-visibility: hidden;
+  /* 面是 3D 树的叶子，opacity 落在这里不会触发 preserve-3d 拍扁 */
+  opacity: var(--o, 1);
+  transition: opacity 700ms ease-out;
+  transition-delay: calc(var(--i, 0) * 60ms);
   background: linear-gradient(
     158deg,
     color-mix(in oklab, var(--tone-base) 74%, white),
@@ -606,16 +676,39 @@
 
 /* ---------- 持续飞入的"进货流" ---------- */
 
+/*
+ * 飞行块的透明度同样不能写在容器上：它全程处于 0~0.95 之间，
+ * 容器带 opacity 的话整趟飞行都是拍扁的纸片。位移走容器，淡入淡出走面。
+ */
 .sq-ob__flyer {
   animation: sq-fly var(--dur) cubic-bezier(0.36, 0.02, 0.2, 1) infinite both;
   animation-delay: var(--fd);
 }
 
+.sq-ob__flyer .sq-ob__face {
+  animation: sq-fly-fade var(--dur) cubic-bezier(0.36, 0.02, 0.2, 1) infinite
+    both;
+  animation-delay: var(--fd);
+}
+
 @keyframes sq-fly {
   0% {
-    opacity: 0;
     transform: translate3d(var(--fx), 360px, var(--fz)) rotateX(var(--fa))
       rotateY(var(--fb)) scale3d(0.28, 0.28, 0.28);
+  }
+  100% {
+    transform: translate3d(
+        calc(var(--sq-u) * var(--tx)),
+        calc(var(--sq-u) * var(--ty)),
+        var(--tz)
+      )
+      rotateX(0deg) rotateY(0deg) scale3d(0.92, 0.92, 0.92);
+  }
+}
+
+@keyframes sq-fly-fade {
+  0% {
+    opacity: 0;
   }
   14% {
     opacity: 0.95;
@@ -625,12 +718,6 @@
   }
   100% {
     opacity: 0;
-    transform: translate3d(
-        calc(var(--sq-u) * var(--tx)),
-        calc(var(--sq-u) * var(--ty)),
-        var(--tz)
-      )
-      rotateX(0deg) rotateY(0deg) scale3d(0.92, 0.92, 0.92);
   }
 }
 
@@ -817,7 +904,8 @@
   .sq-ob__strip::after,
   .sq-ob__crumple,
   .sq-ob__sweep,
-  .sq-ob__flyer {
+  .sq-ob__flyer,
+  .sq-ob__ring {
     display: none;
   }
 
@@ -834,7 +922,8 @@
   }
 
   .sq-ob__cube,
-  .sq-ob__shadow {
+  .sq-ob__shadow,
+  .sq-ob__face {
     transition-duration: 1ms;
     transition-delay: 0ms;
   }

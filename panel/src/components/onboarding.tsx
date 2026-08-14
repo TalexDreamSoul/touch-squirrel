@@ -189,6 +189,10 @@ export function Onboarding() {
 
   const rootRef = useRef<HTMLDivElement>(null);
   const displaceRef = useRef<SVGFEDisplacementMapElement>(null);
+  const waterRef = useRef<HTMLDivElement>(null);
+  const rippleNoiseRef = useRef<SVGFETurbulenceElement>(null);
+  const rippleDisplaceRef = useRef<SVGFEDisplacementMapElement>(null);
+  const prevStepRef = useRef(0);
 
   // 只在客户端判定首帧，避免静态导出的 SSR 产物与水合结果不一致
   useEffect(() => {
@@ -252,6 +256,49 @@ export function Onboarding() {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [open]);
+
+  // 换阵型时整个水面过一道衰减波：位移快速涌到峰值，再按指数拖尾收干，
+  // 频率随衰减略微收紧。参考 nexus 首页 EventHorizon 的入场波前（damped ring）。
+  useEffect(() => {
+    if (prevStepRef.current === step) return;
+    prevStepRef.current = step;
+    if (prefersReducedMotion()) return;
+    const water = waterRef.current;
+    const displace = rippleDisplaceRef.current;
+    const noise = rippleNoiseRef.current;
+    if (!water || !displace || !noise) return;
+    // 滤镜只在波动期间挂上，平时不进滤镜合成，空转动画不背这个开销
+    water.dataset.ripple = "true";
+    const DURATION = 1000;
+    const PEAK = 26;
+    const RISE = 0.16;
+    let start = 0;
+    let raf = 0;
+    const done = () => {
+      displace.setAttribute("scale", "0");
+      delete water.dataset.ripple;
+    };
+    const tick = (now: number) => {
+      if (!start) start = now;
+      const t = Math.min(1, (now - start) / DURATION);
+      const env =
+        t < RISE
+          ? Math.sin(((t / RISE) * Math.PI) / 2)
+          : Math.exp(-((t - RISE) / (1 - RISE)) * 3.6);
+      displace.setAttribute("scale", (PEAK * env).toFixed(2));
+      noise.setAttribute(
+        "baseFrequency",
+        `0.009 ${(0.022 + 0.01 * (1 - env)).toFixed(4)}`,
+      );
+      if (t < 1) raf = requestAnimationFrame(tick);
+      else done();
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      done();
+    };
+  }, [step]);
 
   useEffect(() => {
     if (!open) return;
@@ -363,6 +410,25 @@ export function Onboarding() {
             yChannelSelector="G"
           />
         </filter>
+        {/* 换阵型时给整个 3D 水面用的折射波，scale 由 JS 按衰减包络驱动 */}
+        <filter id="sq-ripple" x="-8%" y="-8%" width="116%" height="116%">
+          <feTurbulence
+            ref={rippleNoiseRef}
+            type="turbulence"
+            baseFrequency="0.009 0.022"
+            numOctaves={2}
+            seed={3}
+            result="wave"
+          />
+          <feDisplacementMap
+            ref={rippleDisplaceRef}
+            in="SourceGraphic"
+            in2="wave"
+            scale={0}
+            xChannelSelector="R"
+            yChannelSelector="G"
+          />
+        </filter>
       </svg>
 
       <div className="sq-ob__backdrop" onClick={close} />
@@ -403,15 +469,69 @@ export function Onboarding() {
             <div className="sq-ob__viewport" aria-hidden>
               <div className="sq-ob__aura" />
               <div className="sq-ob__halo" />
-              <div className="sq-ob__orbit">
-                <div className="sq-ob__scene">
-                  <div className="sq-ob__grid" />
-                  <div className="sq-ob__floor" />
+              {/* aura/halo 留在水面外：波动滤镜会隔离混合上下文，halo 的
+                  mix-blend 必须继续采样到 viewport 的背景才不会亮度跳变 */}
+              <div className="sq-ob__water" ref={waterRef}>
+                <div className="sq-ob__orbit">
+                  <div className="sq-ob__scene">
+                    <div className="sq-ob__grid" />
+                    <div className="sq-ob__floor" />
 
-                  <div className="sq-ob__mirror">
+                    {/* 每次换阵型，从落点扩一圈衰减的水波环 */}
+                    {started ? (
+                      <>
+                        <div key={`ring-a-${step}`} className="sq-ob__ring" />
+                        <div
+                          key={`ring-b-${step}`}
+                          className="sq-ob__ring sq-ob__ring--late"
+                        />
+                      </>
+                    ) : null}
+
+                    <div className="sq-ob__mirror">
+                      {poses.map((p, i) => (
+                        <div
+                          key={`mirror-${i}`}
+                          className="sq-ob__cube"
+                          data-brand={i === poses.length - 1}
+                          style={
+                            {
+                              "--i": i,
+                              "--x": p.x,
+                              "--y": p.y,
+                              "--z": `${p.z}px`,
+                              "--rx": `${p.rx}deg`,
+                              "--ry": `${p.ry}deg`,
+                              "--k": p.k,
+                              "--o": p.o,
+                              "--s": 1,
+                            } as React.CSSProperties
+                          }
+                        >
+                          <CubeFaces logo={SERVICES[i]} mark={i === poses.length - 1} />
+                        </div>
+                      ))}
+                    </div>
+
                     {poses.map((p, i) => (
                       <div
-                        key={`mirror-${i}`}
+                        key={`shadow-${i}`}
+                        className="sq-ob__shadow"
+                        style={
+                          {
+                            "--i": i,
+                            "--x": p.x,
+                            "--z": `${p.z}px`,
+                            "--k": p.k,
+                            "--o": p.o,
+                          } as React.CSSProperties
+                        }
+                      />
+                    ))}
+
+                    {poses.map((p, i) => (
+                      <div
+                        key={i}
                         className="sq-ob__cube"
                         data-brand={i === poses.length - 1}
                         style={
@@ -431,76 +551,37 @@ export function Onboarding() {
                         <CubeFaces logo={SERVICES[i]} mark={i === poses.length - 1} />
                       </div>
                     ))}
+
+                    {/* 只在「囤」这一步跑进货流，后面两步讲的是别的事 */}
+                    {started && step === 0
+                      ? FLYERS.map((f, i) => (
+                          <div
+                            key={`flyer-${i}`}
+                            className="sq-ob__flyer"
+                            data-brand={f.brand ? "true" : "false"}
+                            style={
+                              {
+                                "--fx": f.fx,
+                                "--fz": f.fz,
+                                "--fa": `${f.fa}deg`,
+                                "--fb": `${f.fb}deg`,
+                                "--tx": f.tx,
+                                "--ty": f.ty,
+                                "--tz": `${f.tz}px`,
+                                "--s": f.size,
+                                "--dur": `${f.dur}s`,
+                                "--fd": `${f.delay}s`,
+                              } as React.CSSProperties
+                            }
+                          >
+                            <CubeFaces logo={SERVICES[i % SERVICES.length]} mark={f.brand} />
+                          </div>
+                        ))
+                      : null}
                   </div>
-
-                  {poses.map((p, i) => (
-                    <div
-                      key={`shadow-${i}`}
-                      className="sq-ob__shadow"
-                      style={
-                        {
-                          "--i": i,
-                          "--x": p.x,
-                          "--z": `${p.z}px`,
-                          "--k": p.k,
-                          "--o": p.o,
-                        } as React.CSSProperties
-                      }
-                    />
-                  ))}
-
-                  {poses.map((p, i) => (
-                    <div
-                      key={i}
-                      className="sq-ob__cube"
-                      data-brand={i === poses.length - 1}
-                      style={
-                        {
-                          "--i": i,
-                          "--x": p.x,
-                          "--y": p.y,
-                          "--z": `${p.z}px`,
-                          "--rx": `${p.rx}deg`,
-                          "--ry": `${p.ry}deg`,
-                          "--k": p.k,
-                          "--o": p.o,
-                          "--s": 1,
-                        } as React.CSSProperties
-                      }
-                    >
-                      <CubeFaces logo={SERVICES[i]} mark={i === poses.length - 1} />
-                    </div>
-                  ))}
-
-                  {/* 只在「囤」这一步跑进货流，后面两步讲的是别的事 */}
-                  {started && step === 0
-                    ? FLYERS.map((f, i) => (
-                        <div
-                          key={`flyer-${i}`}
-                          className="sq-ob__flyer"
-                          data-brand={f.brand ? "true" : "false"}
-                          style={
-                            {
-                              "--fx": f.fx,
-                              "--fz": f.fz,
-                              "--fa": `${f.fa}deg`,
-                              "--fb": `${f.fb}deg`,
-                              "--tx": f.tx,
-                              "--ty": f.ty,
-                              "--tz": `${f.tz}px`,
-                              "--s": f.size,
-                              "--dur": `${f.dur}s`,
-                              "--fd": `${f.delay}s`,
-                            } as React.CSSProperties
-                          }
-                        >
-                          <CubeFaces logo={SERVICES[i % SERVICES.length]} mark={f.brand} />
-                        </div>
-                      ))
-                    : null}
                 </div>
+                <div className="sq-ob__fade" />
               </div>
-              <div className="sq-ob__fade" />
             </div>
 
             <div className="sq-ob__copy">
