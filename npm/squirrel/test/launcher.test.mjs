@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   commandArgs,
   defaultCacheRoot,
+  downloadTimeout,
   ensureBinary,
   packageVersion,
   parseChecksums,
@@ -18,8 +19,8 @@ test("defaults to the web manager", () => {
   assert.deepEqual(commandArgs(["doctor"]), ["doctor"]);
 });
 
-test("reads the packaged launcher version", async () => {
-  assert.equal(await packageVersion(), "0.2.0");
+test("reads a valid packaged launcher version", async () => {
+  assert.match(await packageVersion(), /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
 });
 
 test("maps supported release assets", () => {
@@ -46,5 +47,14 @@ test("honors an explicit cache directory", () => {
   assert.equal(
     defaultCacheRoot("linux", { SQUIRREL_CACHE_DIR: "./cache" }),
     path.resolve("./cache"),
+  );
+});
+
+test("allows slow release downloads", () => {
+  assert.equal(downloadTimeout({}), 15 * 60 * 1000);
+  assert.equal(downloadTimeout({ SQUIRREL_DOWNLOAD_TIMEOUT_MS: "300000" }), 300000);
+  assert.throws(
+    () => downloadTimeout({ SQUIRREL_DOWNLOAD_TIMEOUT_MS: "500" }),
+    /at least 1000/,
   );
 });

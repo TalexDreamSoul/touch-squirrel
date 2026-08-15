@@ -29,6 +29,7 @@ const (
 	maxExtractedBytes            = uint64(500 << 20)
 	maxArchiveFiles              = 20_000
 	maxCompressionRatio          = uint64(1_000)
+	repositoryDownloadTimeout    = 15 * time.Minute
 )
 
 var githubSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
@@ -98,7 +99,7 @@ type Market struct {
 
 func NewMarket(cacheRoot string, manager *Manager) *Market {
 	client := &http.Client{
-		Timeout: 90 * time.Second,
+		Timeout: repositoryDownloadTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
 				return fmt.Errorf("too many GitHub redirects")
