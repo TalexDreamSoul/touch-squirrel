@@ -3,7 +3,6 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -220,7 +219,7 @@ export function ArtifactWarehouse({
   };
   const total = data?.total || 0;
   const totalPages = data?.total_pages || 1;
-  const currentIDs = useMemo(() => rows.map((item) => item.id), [rows]);
+  const currentIDs = rows.map((item) => item.id);
   const selectedOnPage = currentIDs.filter((id) => selected.has(id)).length;
   const allOnPageSelected = currentIDs.length > 0 && selectedOnPage === currentIDs.length;
 
