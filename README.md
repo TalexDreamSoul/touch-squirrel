@@ -62,7 +62,7 @@ npx --yes @talex-touch/squirrel@latest web
 需要固定版本时，将 `latest` 替换为具体版本：
 
 ```bash
-npx --yes @talex-touch/squirrel@0.2.5 doctor
+npx --yes @talex-touch/squirrel@0.3.0 doctor
 ```
 
 ### 安装功能插件
