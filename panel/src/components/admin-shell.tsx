@@ -3,7 +3,6 @@
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  ArchiveIcon,
   BellIcon,
   BookOpenIcon,
   BinocularsIcon,
@@ -32,6 +31,7 @@ import { Onboarding } from "@/components/onboarding";
 
 type NavItem = {
   href: string;
+  target?: string;
   label: string;
   icon: typeof HouseIcon;
 };
@@ -51,17 +51,14 @@ const navGroups: NavGroup[] = [
   },
   {
     label: "Host",
-    items: [
-      { href: "/plugins", label: "插件", icon: PlugsIcon },
-      { href: "/artifacts", label: "产物", icon: ArchiveIcon },
-    ],
+    items: [{ href: "/plugins", label: "插件", icon: PlugsIcon }],
   },
   {
     label: "凭证",
     items: [
       { href: "/upload", label: "上传", icon: CloudArrowUpIcon },
       { href: "/export", label: "导出", icon: DownloadSimpleIcon },
-      { href: "/pool", label: "号池", icon: StackIcon },
+      { href: "/pool", target: "/pool/?tab=list", label: "凭证池", icon: StackIcon },
     ],
   },
   {
@@ -168,7 +165,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
                       <Sidebar.MenuButton
                         icon={item.icon}
                         active={active}
-                        onClick={() => router.push(item.href)}
+                        onClick={() => router.push(item.target || item.href)}
                         title={item.label}
                         className="!whitespace-nowrap"
                       >
