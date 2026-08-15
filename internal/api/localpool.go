@@ -61,6 +61,9 @@ func (s *Server) handleLocalPoolImport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.indexLocalEntries(entries)
+		if len(entries) > 0 {
+			s.runArtifactBackfill()
+		}
 		importedCount := recordRunImport(dir)
 		if s.shouldAutoSync() {
 			go s.syncLocalPool(false)
@@ -84,6 +87,9 @@ func (s *Server) handleLocalPoolImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.indexLocalEntries(entries)
+	if len(entries) > 0 {
+		s.runArtifactBackfill()
+	}
 	if runID != "" {
 		if dir, resolveErr := s.resolveRun(runID); resolveErr == nil {
 			recordRunImport(dir)
@@ -202,6 +208,9 @@ func (s *Server) autoImportLatestRun(runID string) {
 		}
 	}
 	s.indexLocalEntries(entries)
+	if len(entries) > 0 {
+		s.runArtifactBackfill()
+	}
 	if cfg.LocalPoolAutoSync {
 		go s.syncLocalPool(false)
 	}

@@ -52,12 +52,15 @@ type Account struct {
 
 // ListFilter for paginated queries.
 type ListFilter struct {
-	Type   string // empty = all
-	Plugin string
-	Status string
-	Q      string // matches label/email/external_id
-	Page   int
-	Limit  int
+	Type      string // empty = all
+	Plugin    string
+	Status    string
+	Q         string // matches label/email/external_id
+	TimeField string // created_at|updated_at|last_used_at
+	From      string // inclusive RFC3339
+	To        string // exclusive RFC3339
+	Page      int
+	Limit     int
 }
 
 // ListResult is a page of accounts + totals.
@@ -141,6 +144,9 @@ CREATE INDEX IF NOT EXISTS idx_accounts_type ON accounts(type);
 CREATE INDEX IF NOT EXISTS idx_accounts_plugin ON accounts(plugin);
 CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);
 CREATE INDEX IF NOT EXISTS idx_accounts_external ON accounts(type, external_id);
+CREATE INDEX IF NOT EXISTS idx_accounts_created ON accounts(created_at);
+CREATE INDEX IF NOT EXISTS idx_accounts_updated ON accounts(updated_at);
+CREATE INDEX IF NOT EXISTS idx_accounts_last_used ON accounts(last_used_at);
 `)
 	return err
 }
@@ -187,6 +193,15 @@ func (s *Store) Upsert(a Account) (Account, error) {
 	if a.Meta == nil {
 		a.Meta = map[string]string{}
 	}
+	a.CreatedAt = strings.TrimSpace(a.CreatedAt)
+	if a.CreatedAt != "" {
+		parsed, err := time.Parse(time.RFC3339, a.CreatedAt)
+		if err != nil || parsed.IsZero() {
+			a.CreatedAt = ""
+		} else {
+			a.CreatedAt = parsed.UTC().Format(time.RFC3339)
+		}
+	}
 	metaRaw, _ := json.Marshal(a.Meta)
 
 	// resolve existing by external id
@@ -202,7 +217,9 @@ func (s *Store) Upsert(a Account) (Account, error) {
 	}
 	if a.ID == "" {
 		a.ID = newID()
-		a.CreatedAt = now
+		if a.CreatedAt == "" {
+			a.CreatedAt = now
+		}
 	} else if a.CreatedAt == "" {
 		var created string
 		if err := s.db.QueryRow(`SELECT created_at FROM accounts WHERE id = ?`, a.ID).Scan(&created); err == nil {
@@ -219,17 +236,33 @@ INSERT INTO accounts(
   source, run_id, created_at, updated_at, last_used_at
 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
+  updated_at=CASE WHEN
+    accounts.type != excluded.type OR
+    accounts.plugin != excluded.plugin OR
+    accounts.label != excluded.label OR
+    (accounts.status != excluded.status AND NOT (accounts.status='disabled' AND excluded.status='active' AND excluded.type!='tavily')) OR
+    accounts.email != excluded.email OR
+    accounts.external_id != excluded.external_id OR
+    accounts.secret_ref != excluded.secret_ref OR
+    accounts.meta_json != excluded.meta_json OR
+    accounts.source != excluded.source OR
+    accounts.run_id != excluded.run_id OR
+    (excluded.last_used_at != '' AND accounts.last_used_at != excluded.last_used_at)
+    THEN excluded.updated_at ELSE accounts.updated_at END,
   type=excluded.type,
   plugin=excluded.plugin,
   label=excluded.label,
-  status=excluded.status,
+  status=CASE
+    WHEN accounts.status='disabled' AND excluded.status='active' AND excluded.type!='tavily' THEN accounts.status
+    ELSE excluded.status
+  END,
   email=excluded.email,
   external_id=excluded.external_id,
   secret_ref=excluded.secret_ref,
   meta_json=excluded.meta_json,
   source=excluded.source,
   run_id=excluded.run_id,
-  updated_at=excluded.updated_at,
+  created_at=CASE WHEN excluded.created_at != '' AND accounts.created_at != excluded.created_at THEN excluded.created_at ELSE accounts.created_at END,
   last_used_at=CASE WHEN excluded.last_used_at != '' THEN excluded.last_used_at ELSE accounts.last_used_at END
 `, a.ID, a.Type, a.Plugin, a.Label, a.Status, a.Email, a.ExternalID, a.SecretRef, string(metaRaw),
 		a.Source, a.RunID, a.CreatedAt, a.UpdatedAt, a.LastUsedAt)
@@ -272,6 +305,26 @@ func (s *Store) List(f ListFilter) (ListResult, error) {
 		where = append(where, "(label LIKE ? OR email LIKE ? OR external_id LIKE ? OR id LIKE ?)")
 		like := "%" + q + "%"
 		args = append(args, like, like, like, like)
+	}
+	timeField := strings.TrimSpace(f.TimeField)
+	if timeField == "" {
+		timeField = "created_at"
+	}
+	switch timeField {
+	case "created_at", "updated_at", "last_used_at":
+	default:
+		return ListResult{}, fmt.Errorf("invalid time field %q", timeField)
+	}
+	if (strings.TrimSpace(f.From) != "" || strings.TrimSpace(f.To) != "") && timeField == "last_used_at" {
+		where = append(where, "last_used_at != ''")
+	}
+	if from := strings.TrimSpace(f.From); from != "" {
+		where = append(where, timeField+" >= ?")
+		args = append(args, from)
+	}
+	if to := strings.TrimSpace(f.To); to != "" {
+		where = append(where, timeField+" < ?")
+		args = append(args, to)
 	}
 	wsql := strings.Join(where, " AND ")
 
@@ -329,6 +382,109 @@ func (s *Store) List(f ListFilter) (ListResult, error) {
 		TotalPages: pages,
 		ByType:     byType,
 	}, nil
+}
+
+// GetMany returns accounts keyed by ID. Missing IDs are omitted.
+func (s *Store) GetMany(ids []string) (map[string]Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(ids) == 0 {
+		return map[string]Account{}, nil
+	}
+	if len(ids) > 500 {
+		return nil, fmt.Errorf("too many account ids: %d", len(ids))
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = strings.TrimSpace(id)
+	}
+	rows, err := s.db.Query(
+		`SELECT id, type, plugin, label, status, email, external_id, secret_ref, meta_json,
+		        source, run_id, created_at, updated_at, last_used_at
+		 FROM accounts WHERE id IN (`+strings.Join(placeholders, ",")+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]Account, len(ids))
+	for rows.Next() {
+		account, scanErr := scanAccount(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out[account.ID] = account
+	}
+	return out, rows.Err()
+}
+
+// SetStatus updates one account's operational status.
+func (s *Store) SetStatus(id, status string) error {
+	status = strings.TrimSpace(status)
+	switch status {
+	case StatusActive, StatusDisabled, StatusExhausted, StatusUnknown:
+	default:
+		return fmt.Errorf("invalid account status %q", status)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.db.Exec(
+		`UPDATE accounts SET status = ?, updated_at = ? WHERE id = ?`,
+		status,
+		time.Now().UTC().Format(time.RFC3339),
+		strings.TrimSpace(id),
+	)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// Delete removes one account index row. Secret deletion belongs to the source adapter.
+func (s *Store) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.db.Exec(`DELETE FROM accounts WHERE id = ?`, strings.TrimSpace(id))
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// GetByExternal returns one account by source identity.
+func (s *Store) GetByExternal(accountType, externalID string) (Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return scanAccount(s.db.QueryRow(
+		`SELECT id, type, plugin, label, status, email, external_id, secret_ref, meta_json,
+		        source, run_id, created_at, updated_at, last_used_at
+		 FROM accounts WHERE type = ? AND external_id = ? LIMIT 1`,
+		strings.TrimSpace(accountType),
+		strings.TrimSpace(externalID),
+	))
+}
+
+// DeleteByExternal removes an index row after its backing source was deleted.
+func (s *Store) DeleteByExternal(accountType, externalID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`DELETE FROM accounts WHERE type = ? AND external_id = ?`,
+		strings.TrimSpace(accountType),
+		strings.TrimSpace(externalID),
+	)
+	return err
 }
 
 // Types returns distinct type values.

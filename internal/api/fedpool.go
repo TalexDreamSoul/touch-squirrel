@@ -52,7 +52,15 @@ func (s *Server) handleFederationPoolList(w http.ResponseWriter, r *http.Request
 		"page_size":       pageSize,
 		"total_pages":     pageCount(total, pageSize),
 		"files":           list,
-		"master_name":     firstNonEmpty(cfg.ClusterNodeName, "master"),
+		"capabilities": map[string]bool{
+			"download":    cfg.ClusterSharePoolPull,
+			"upload_cpa":  cfg.ClusterSharePoolPull,
+			"enable":      false,
+			"disable":     false,
+			"delete":      false,
+			"time_filter": false,
+		},
+		"master_name": firstNonEmpty(cfg.ClusterNodeName, "master"),
 	})
 }
 
@@ -102,6 +110,9 @@ func (s *Server) handleFederationPoolPull(w http.ResponseWriter, r *http.Request
 //	plugin=…  status=…  q=…                (accounts only)
 //	master=<base url> when source=federation
 func (s *Server) handleUnifiedPoolList(w http.ResponseWriter, r *http.Request) {
+	if !s.allowSensitiveRequest(w, r) {
+		return
+	}
 	q := r.URL.Query()
 	source := strings.ToLower(strings.TrimSpace(q.Get("source")))
 	if source == "" {
@@ -115,19 +126,24 @@ func (s *Server) handleUnifiedPoolList(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 500, map[string]any{"ok": false, "error": "accounts store unavailable"})
 			return
 		}
-		// refresh from legacy sources (upsert-safe) so new keys show up
-		_, _ = s.accounts.AutoMigrate(acctpool.MigrateOptions{
-			LocalPoolDir:   s.opt.Paths.LocalPool,
-			TavilyKeysPath: tavilypool.DefaultStatePath(s.opt.Paths.Root),
-			Force:          true,
-		})
+		s.tavilyMu.Lock()
+		_, _ = s.accounts.RefreshTavily(tavilypool.DefaultStatePath(s.opt.Paths.Root))
+		s.tavilyMu.Unlock()
+		field, from, to, filterErr := parsePoolTimeFilter(q)
+		if filterErr != nil {
+			writeJSON(w, 400, map[string]any{"ok": false, "error": filterErr.Error()})
+			return
+		}
 		res, err := s.accounts.List(acctpool.ListFilter{
-			Type:   q.Get("type"),
-			Plugin: q.Get("plugin"),
-			Status: q.Get("status"),
-			Q:      q.Get("q"),
-			Page:   page,
-			Limit:  pageSize,
+			Type:      q.Get("type"),
+			Plugin:    q.Get("plugin"),
+			Status:    q.Get("status"),
+			Q:         q.Get("q"),
+			TimeField: field,
+			From:      from,
+			To:        to,
+			Page:      page,
+			Limit:     pageSize,
 		})
 		if err != nil {
 			writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
@@ -135,16 +151,17 @@ func (s *Server) handleUnifiedPoolList(w http.ResponseWriter, r *http.Request) {
 		}
 		types, _ := s.accounts.Types()
 		writeJSON(w, 200, map[string]any{
-			"ok":          true,
-			"source":      "accounts",
-			"items":       res.Items,
-			"total":       res.Total,
-			"page":        res.Page,
-			"page_size":   res.PageSize,
-			"total_pages": res.TotalPages,
-			"by_type":     res.ByType,
-			"types":       types,
-			"db":          s.accounts.Path(),
+			"ok":           true,
+			"source":       "accounts",
+			"items":        res.Items,
+			"total":        res.Total,
+			"page":         res.Page,
+			"page_size":    res.PageSize,
+			"total_pages":  res.TotalPages,
+			"by_type":      res.ByType,
+			"types":        types,
+			"db":           s.accounts.Path(),
+			"capabilities": poolCapabilities("accounts", true),
 		})
 	case "local":
 		all := s.localPool.List()
@@ -159,14 +176,15 @@ func (s *Server) handleUnifiedPoolList(w http.ResponseWriter, r *http.Request) {
 		}
 		items := all[start:end]
 		writeJSON(w, 200, map[string]any{
-			"ok":          true,
-			"source":      "local",
-			"total":       total,
-			"unsynced":    unsynced,
-			"page":        page,
-			"page_size":   pageSize,
-			"total_pages": pageCount(len(all), pageSize),
-			"items":       items,
+			"ok":           true,
+			"source":       "local",
+			"total":        total,
+			"unsynced":     unsynced,
+			"page":         page,
+			"page_size":    pageSize,
+			"total_pages":  pageCount(len(all), pageSize),
+			"items":        items,
+			"capabilities": poolCapabilities("local", true),
 		})
 	case "cloud":
 		list, total, err := s.transfer.ListRemotePage("", "", true, page, pageSize)
@@ -175,27 +193,28 @@ func (s *Server) handleUnifiedPoolList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, map[string]any{
-			"ok":          true,
-			"source":      "cloud",
-			"total":       total,
-			"page":        page,
-			"page_size":   pageSize,
-			"total_pages": pageCount(total, pageSize),
-			"files":       list,
-			"can_pull":    true, // local panel has CPA key
+			"ok":           true,
+			"source":       "cloud",
+			"total":        total,
+			"page":         page,
+			"page_size":    pageSize,
+			"total_pages":  pageCount(total, pageSize),
+			"files":        list,
+			"can_pull":     true, // local panel has CPA key
+			"capabilities": poolCapabilities("cloud", true),
 		})
 	case "federation", "master", "fed":
-		master := strings.TrimRight(strings.TrimSpace(q.Get("master")), "/")
-		if master == "" {
-			writeJSON(w, 400, map[string]any{"ok": false, "error": "缺少 master 参数"})
-			return
-		}
 		cfg, err := config.Load(s.opt.Paths.Config)
 		if err != nil {
 			writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
-		body, status, err := federationGET(master, "/api/federation/pool", cfg.ClusterPublicToken, map[string]string{
+		master, masterToken, err := configuredFederationMaster(cfg, q.Get("master"))
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		body, status, err := federationGET(master, "/api/federation/pool", masterToken, map[string]string{
 			"page":  strconv.Itoa(page),
 			"limit": strconv.Itoa(pageSize),
 		})
@@ -211,8 +230,59 @@ func (s *Server) handleUnifiedPoolList(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func parsePoolTimeFilter(query url.Values) (field, from, to string, err error) {
+	field = strings.TrimSpace(query.Get("time_field"))
+	if field == "" {
+		field = "created_at"
+	}
+	switch field {
+	case "created_at", "updated_at", "last_used_at":
+	default:
+		return "", "", "", fmt.Errorf("time_field 须为 created_at|updated_at|last_used_at")
+	}
+	from = strings.TrimSpace(query.Get("from"))
+	to = strings.TrimSpace(query.Get("to"))
+	var fromTime, toTime time.Time
+	if from != "" {
+		fromTime, err = time.Parse(time.RFC3339, from)
+		if err != nil {
+			return "", "", "", fmt.Errorf("from 须为 RFC3339 时间")
+		}
+		from = fromTime.UTC().Format(time.RFC3339)
+	}
+	if to != "" {
+		toTime, err = time.Parse(time.RFC3339, to)
+		if err != nil {
+			return "", "", "", fmt.Errorf("to 须为 RFC3339 时间")
+		}
+		to = toTime.UTC().Format(time.RFC3339)
+	}
+	if !fromTime.IsZero() && !toTime.IsZero() && !fromTime.Before(toTime) {
+		return "", "", "", fmt.Errorf("from 必须早于 to")
+	}
+	return field, from, to, nil
+}
+
+func poolCapabilities(source string, federationPull bool) map[string]bool {
+	switch source {
+	case "accounts":
+		return map[string]bool{"enable": true, "disable": true, "upload_cpa": true, "download": true, "delete": true, "time_filter": true}
+	case "local":
+		return map[string]bool{"enable": false, "disable": false, "upload_cpa": true, "download": true, "delete": true, "time_filter": false}
+	case "cloud":
+		return map[string]bool{"enable": false, "disable": false, "upload_cpa": false, "download": true, "delete": true, "time_filter": false}
+	case "federation":
+		return map[string]bool{"enable": false, "disable": false, "upload_cpa": federationPull, "download": federationPull, "delete": false, "time_filter": false}
+	default:
+		return map[string]bool{}
+	}
+}
+
 // handleUnifiedPoolPull downloads from cloud (local CPA) or federation master.
 func (s *Server) handleUnifiedPoolPull(w http.ResponseWriter, r *http.Request) {
+	if !s.allowSensitiveRequest(w, r) {
+		return
+	}
 	q := r.URL.Query()
 	source := strings.ToLower(strings.TrimSpace(q.Get("source")))
 	name := strings.TrimSpace(q.Get("name"))
@@ -238,17 +308,17 @@ func (s *Server) handleUnifiedPoolPull(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		_, _ = w.Write(raw)
 	case "federation", "master", "fed":
-		master := strings.TrimRight(strings.TrimSpace(q.Get("master")), "/")
-		if master == "" {
-			writeJSON(w, 400, map[string]any{"ok": false, "error": "缺少 master 参数"})
-			return
-		}
 		cfg, err := config.Load(s.opt.Paths.Config)
 		if err != nil {
 			writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
-		body, status, err := federationGET(master, "/api/federation/pool/pull", cfg.ClusterPublicToken, map[string]string{
+		master, masterToken, err := configuredFederationMaster(cfg, q.Get("master"))
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		body, status, err := federationGET(master, "/api/federation/pool/pull", masterToken, map[string]string{
 			"name": name,
 		})
 		if err != nil {
@@ -279,6 +349,26 @@ func (s *Server) clusterAuthorize(cfg config.Config, token string) (int, string)
 	return 0, ""
 }
 
+func configuredFederationMaster(cfg config.Config, requested string) (string, string, error) {
+	requested = strings.TrimRight(strings.TrimSpace(requested), "/")
+	endpoints := cfg.ClusterMasterEndpoints()
+	if requested == "" && len(endpoints) > 0 {
+		requested = strings.TrimRight(endpoints[0].URL, "/")
+	}
+	for _, endpoint := range endpoints {
+		candidate := strings.TrimRight(strings.TrimSpace(endpoint.URL), "/")
+		if candidate != requested {
+			continue
+		}
+		token := strings.TrimSpace(endpoint.Token)
+		if token == "" {
+			token = strings.TrimSpace(cfg.ClusterPublicToken)
+		}
+		return candidate, token, nil
+	}
+	return "", "", fmt.Errorf("master must match a configured cluster endpoint")
+}
+
 func federationGET(masterBase, path, token string, query map[string]string) ([]byte, int, error) {
 	u, err := url.Parse(strings.TrimRight(masterBase, "/") + path)
 	if err != nil {
@@ -296,15 +386,27 @@ func federationGET(masterBase, path, token string, query map[string]string) ([]b
 	if strings.TrimSpace(token) != "" {
 		req.Header.Set("X-Cluster-Token", token)
 	}
-	client := &http.Client{Timeout: 45 * time.Second}
+	limit := int64(8 << 20)
+	if strings.HasSuffix(path, "/pull") {
+		limit = maxPoolFileBytes
+	}
+	client := &http.Client{
+		Timeout: 45 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	res, err := client.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer res.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	b, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
 	if err != nil {
 		return nil, res.StatusCode, err
+	}
+	if int64(len(b)) > limit {
+		return nil, res.StatusCode, fmt.Errorf("federation response exceeds %d MiB", limit>>20)
 	}
 	return b, res.StatusCode, nil
 }

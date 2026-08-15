@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,8 @@ const (
 	StatusExhausted KeyStatus = "exhausted"
 	StatusDisabled  KeyStatus = "disabled"
 )
+
+var ErrKeyNotFound = errors.New("tavily key not found")
 
 // Key is one upstream Tavily API key (secret kept on disk, not logged).
 type Key struct {
@@ -43,11 +46,18 @@ type Snapshot struct {
 // Pool is a file-backed multi-key store with LRU selection.
 type Pool struct {
 	Path string
-	mu   sync.Mutex
+	mu   *sync.Mutex
 }
 
+var poolLocks sync.Map
+
 func New(path string) *Pool {
-	return &Pool{Path: path}
+	path = filepath.Clean(path)
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	lock, _ := poolLocks.LoadOrStore(path, &sync.Mutex{})
+	return &Pool{Path: path, mu: lock.(*sync.Mutex)}
 }
 
 func (p *Pool) load() (Snapshot, error) {
@@ -182,7 +192,46 @@ func (p *Pool) SetStatus(id string, st KeyStatus) error {
 			return p.saveLocked(snap)
 		}
 	}
-	return fmt.Errorf("key not found: %s", id)
+	return fmt.Errorf("%w: %s", ErrKeyNotFound, id)
+}
+
+// Get returns one key by ID. Secrets are included only when redact is false.
+func (p *Pool) Get(id string, redact bool) (Key, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	snap, err := p.load()
+	if err != nil {
+		return Key{}, err
+	}
+	for _, key := range snap.Keys {
+		if key.ID != strings.TrimSpace(id) {
+			continue
+		}
+		if redact {
+			key.APIKey = maskKey(key.APIKey)
+		}
+		return key, nil
+	}
+	return Key{}, fmt.Errorf("%w: %s", ErrKeyNotFound, id)
+}
+
+// Delete permanently removes one key by ID.
+func (p *Pool) Delete(id string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	snap, err := p.load()
+	if err != nil {
+		return err
+	}
+	id = strings.TrimSpace(id)
+	for i := range snap.Keys {
+		if snap.Keys[i].ID != id {
+			continue
+		}
+		snap.Keys = append(snap.Keys[:i], snap.Keys[i+1:]...)
+		return p.saveLocked(snap)
+	}
+	return fmt.Errorf("%w: %s", ErrKeyNotFound, id)
 }
 
 // Acquire picks an active key by LRU and marks last_used.

@@ -17,15 +17,15 @@ import (
 
 // Entry is one credential in the local pool index.
 type Entry struct {
-	Name       string    `json:"name"`
-	Email      string    `json:"email,omitempty"`
-	SourceRun  string    `json:"source_run,omitempty"`
-	Hash       string    `json:"hash"`
-	Size       int64     `json:"size"`
-	AddedAt    time.Time `json:"added_at"`
+	Name       string     `json:"name"`
+	Email      string     `json:"email,omitempty"`
+	SourceRun  string     `json:"source_run,omitempty"`
+	Hash       string     `json:"hash"`
+	Size       int64      `json:"size"`
+	AddedAt    time.Time  `json:"added_at"`
 	SyncedAt   *time.Time `json:"synced_at,omitempty"`
-	SyncError  string    `json:"sync_error,omitempty"`
-	SyncTarget string    `json:"sync_target,omitempty"` // cpa base or master url
+	SyncError  string     `json:"sync_error,omitempty"`
+	SyncTarget string     `json:"sync_target,omitempty"` // cpa base or master url
 }
 
 // Index is persisted next to credential files.
@@ -198,8 +198,8 @@ func (s *Service) ImportLatest(outputsDir string, lookback int) (runID string, a
 
 // PathFor returns absolute path for a pool entry name.
 func (s *Service) PathFor(name string) (string, error) {
-	name = filepath.Base(strings.TrimSpace(name))
-	if name == "" || strings.Contains(name, "..") {
+	name = strings.TrimSpace(name)
+	if name == "" || name != filepath.Base(name) || strings.ContainsAny(name, "/\\") || !strings.HasSuffix(strings.ToLower(name), ".json") || name == "index.json" {
 		return "", fmt.Errorf("invalid name")
 	}
 	p := filepath.Join(s.dir, name)
@@ -207,6 +207,45 @@ func (s *Service) PathFor(name string) (string, error) {
 		return "", err
 	}
 	return p, nil
+}
+
+// Delete removes one credential file and its index entry.
+func (s *Service) Delete(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" || name != filepath.Base(name) || strings.ContainsAny(name, "/\\") || !strings.HasSuffix(strings.ToLower(name), ".json") || name == "index.json" {
+		return fmt.Errorf("invalid name")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry := s.index.Items[name]
+	if entry == nil {
+		return os.ErrNotExist
+	}
+	path := filepath.Join(s.dir, name)
+	tombstone := path + ".deleting"
+	if err := os.Rename(path, tombstone); err != nil {
+		if os.IsNotExist(err) {
+			delete(s.index.Items, name)
+			return s.saveLocked()
+		}
+		return err
+	}
+	delete(s.index.Items, name)
+	if err := s.saveLocked(); err != nil {
+		s.index.Items[name] = entry
+		_ = os.Rename(tombstone, path)
+		return err
+	}
+	if err := os.Remove(tombstone); err != nil {
+		s.index.Items[name] = entry
+		saveErr := s.saveLocked()
+		renameErr := os.Rename(tombstone, path)
+		if saveErr != nil || renameErr != nil {
+			return fmt.Errorf("remove tombstone: %v; rollback index: %v; rollback file: %v", err, saveErr, renameErr)
+		}
+		return err
+	}
+	return nil
 }
 
 // MarkSynced updates sync metadata for names.

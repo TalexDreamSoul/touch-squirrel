@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/grok-free-register/grok-reg/internal/artifact"
+	"github.com/grok-free-register/grok-reg/internal/config"
 	"github.com/grok-free-register/grok-reg/internal/home"
 )
 
@@ -21,6 +23,8 @@ func newArtifactTestServer(t *testing.T) (*Server, *artifact.Store, home.Paths) 
 	paths := home.Paths{
 		Root:         root,
 		Config:       filepath.Join(root, "config.env"),
+		Outputs:      filepath.Join(root, "outputs"),
+		LocalPool:    filepath.Join(root, "local-pool"),
 		TmpDir:       filepath.Join(root, "tmp"),
 		ExportsDir:   filepath.Join(root, "exports"),
 		PluginsDir:   filepath.Join(root, "plugins"),
@@ -38,12 +42,130 @@ func newArtifactTestServer(t *testing.T) (*Server, *artifact.Store, home.Paths) 
 
 func artifactRequest(server *Server, method, target string, body io.Reader) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, target, body)
+	request.RemoteAddr = "127.0.0.1:4321"
+	request.Host = "127.0.0.1:8787"
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	return response
+}
+
+func TestArtifactsRequireTokenOutsideLoopback(t *testing.T) {
+	server, store, _ := newArtifactTestServer(t)
+	created, err := store.PutJSON("xai-accounts", "account.xai", artifact.StatusFresh, nil, map[string]any{"token": "secret"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{
+		"/api/artifacts",
+		"/api/artifacts/" + created.ID,
+		"/api/artifacts/" + created.ID + "/download",
+	} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.RemoteAddr = "198.51.100.20:4321"
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("target=%s status=%d body=%s", target, response.Code, response.Body.String())
+		}
+	}
+	body := bytes.NewBufferString(`{"ids":["` + created.ID + `"]}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/artifacts/download", body)
+	request.RemoteAddr = "198.51.100.20:4321"
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("batch status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, header := range []string{"Forwarded", "X-Forwarded-For", "X-Real-IP"} {
+		request = httptest.NewRequest(http.MethodGet, "/api/artifacts/"+created.ID, nil)
+		request.RemoteAddr = "127.0.0.1:4321"
+		request.Host = "127.0.0.1:8787"
+		request.Header.Set(header, "198.51.100.20")
+		response = httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("header=%s status=%d body=%s", header, response.Code, response.Body.String())
+		}
+	}
+	for name, mutate := range map[string]func(*http.Request){
+		"host":   func(request *http.Request) { request.Host = "attacker.example" },
+		"origin": func(request *http.Request) { request.Header.Set("Origin", "https://attacker.example") },
+	} {
+		request = httptest.NewRequest(http.MethodGet, "/api/artifacts/"+created.ID, nil)
+		request.RemoteAddr = "127.0.0.1:4321"
+		request.Host = "127.0.0.1:8787"
+		mutate(request)
+		response = httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden || response.Header().Get("Access-Control-Allow-Origin") == "*" {
+			t.Fatalf("case=%s status=%d cors=%q body=%s", name, response.Code, response.Header().Get("Access-Control-Allow-Origin"), response.Body.String())
+		}
+	}
+}
+
+func TestLoopbackListenAddress(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:8787", "localhost:8787", "[::1]:8787"} {
+		if !isLoopbackListenAddr(addr) {
+			t.Fatalf("expected loopback: %s", addr)
+		}
+	}
+	for _, addr := range []string{"", ":8787", "0.0.0.0:8787", "[::]:8787", "198.51.100.20:8787"} {
+		if isLoopbackListenAddr(addr) {
+			t.Fatalf("expected non-loopback: %s", addr)
+		}
+	}
+	server, _, _ := newArtifactTestServer(t)
+	server.opt.Addr = "0.0.0.0:0"
+	if err := server.ListenAndServe(); err == nil || !strings.Contains(err.Error(), "PANEL_TOKEN") {
+		t.Fatalf("expected token requirement, got %v", err)
+	}
+}
+
+func TestLocalPoolImportMirrorsArtifact(t *testing.T) {
+	server, _, paths := newArtifactTestServer(t)
+	runID := "run-mirror"
+	credentialDir := filepath.Join(paths.Outputs, runID, "CPA")
+	if err := os.MkdirAll(credentialDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credentialDir, "xai-mirror.json"), []byte(`{"email":"mirror@example.com","token":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"run_id":"` + runID + `"}`)
+	response := artifactRequest(server, http.MethodPost, "/api/local-pool/import", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("import status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = artifactRequest(server, http.MethodGet, "/api/artifacts?q=xai-mirror.json", nil)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"total":1`) || !strings.Contains(response.Body.String(), "mirror@example.com") {
+		t.Fatalf("artifact status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAutoImportMirrorsArtifact(t *testing.T) {
+	server, _, paths := newArtifactTestServer(t)
+	cfg := config.Defaults()
+	cfg.LocalPoolAutoImport = true
+	if err := config.Save(paths.Config, cfg); err != nil {
+		t.Fatal(err)
+	}
+	runID := "run-auto-mirror"
+	credentialDir := filepath.Join(paths.Outputs, runID, "CPA")
+	if err := os.MkdirAll(credentialDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credentialDir, "xai-auto.json"), []byte(`{"email":"auto@example.com","token":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server.autoImportLatestRun(runID)
+	response := artifactRequest(server, http.MethodGet, "/api/artifacts?q=xai-auto.json", nil)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"total":1`) || !strings.Contains(response.Body.String(), "auto@example.com") {
+		t.Fatalf("artifact status=%d body=%s", response.Code, response.Body.String())
+	}
 }
 
 func TestArtifactsListDetailAndDownload(t *testing.T) {

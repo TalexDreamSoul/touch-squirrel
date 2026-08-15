@@ -134,6 +134,13 @@ func (s *Store) migrateLocalPool(dir string) (int, error) {
 	return n, nil
 }
 
+func (s *Store) RefreshTavily(path string) (int, error) {
+	if s == nil || strings.TrimSpace(path) == "" {
+		return 0, nil
+	}
+	return s.migrateTavilyKeys(path)
+}
+
 func (s *Store) migrateTavilyKeys(path string) (int, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

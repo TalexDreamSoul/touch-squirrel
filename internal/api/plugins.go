@@ -276,7 +276,22 @@ func sortedArtifactFacet(values map[string]struct{}) []string {
 	return out
 }
 
+func (s *Server) allowSensitiveRequest(w http.ResponseWriter, r *http.Request) bool {
+	forwarded := r.Header.Get("Forwarded") != "" || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Real-IP") != ""
+	directLoopback := isLoopbackRemote(r.RemoteAddr) && isLoopbackHost(r.Host) && isLoopbackOrigin(r.Header.Get("Origin"))
+	if s.opt.Token == "" && (!directLoopback || forwarded) {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"ok": false, "error": "sensitive API requires PANEL_TOKEN outside direct loopback access",
+		})
+		return false
+	}
+	return true
+}
+
 func (s *Server) handleArtifactsList(w http.ResponseWriter, r *http.Request) {
+	if !s.allowSensitiveRequest(w, r) {
+		return
+	}
 	pluginID := strings.TrimSpace(r.URL.Query().Get("plugin"))
 	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
@@ -342,6 +357,7 @@ func (s *Server) handleArtifactsList(w http.ResponseWriter, r *http.Request) {
 		"ok": true, "artifacts": rows, "store": s.opt.Paths.ArtifactsDir,
 		"total": total, "page": page, "limit": limit,
 		"total_pages": totalPages,
+		"backfill":    s.artifactBackfillSnapshot(),
 		"facets": map[string]any{
 			"plugins": sortedArtifactFacet(plugins), "kinds": sortedArtifactFacet(kinds),
 			"channels": sortedArtifactFacet(channels), "statuses": sortedArtifactFacet(statuses),
@@ -350,6 +366,9 @@ func (s *Server) handleArtifactsList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleArtifactDetail(w http.ResponseWriter, r *http.Request) {
+	if !s.allowSensitiveRequest(w, r) {
+		return
+	}
 	item, err := artifact.NewStore(s.opt.Paths.ArtifactsDir).Get(r.PathValue("id"))
 	if err != nil {
 		if errors.Is(err, artifact.ErrNotFound) {
@@ -390,6 +409,9 @@ func artifactPayload(item artifact.Artifact) []byte {
 }
 
 func (s *Server) handleArtifactDownload(w http.ResponseWriter, r *http.Request) {
+	if !s.allowSensitiveRequest(w, r) {
+		return
+	}
 	item, err := artifact.NewStore(s.opt.Paths.ArtifactsDir).Get(r.PathValue("id"))
 	if err != nil {
 		if errors.Is(err, artifact.ErrNotFound) {
@@ -409,6 +431,9 @@ func (s *Server) handleArtifactDownload(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleArtifactsDownload(w http.ResponseWriter, r *http.Request) {
+	if !s.allowSensitiveRequest(w, r) {
+		return
+	}
 	var body struct {
 		IDs []string `json:"ids"`
 	}
@@ -503,6 +528,8 @@ func (s *Server) handleTavilyKeysAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"ok": false, "error": "invalid json"})
 		return
 	}
+	s.tavilyMu.Lock()
+	defer s.tavilyMu.Unlock()
 	pool := s.tavilyPool()
 	k, err := pool.Add(body.APIKey, body.Note)
 	if err != nil {
@@ -540,6 +567,8 @@ func (s *Server) handleTavilyKeyStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"ok": false, "error": "status must be active|disabled|exhausted"})
 		return
 	}
+	s.tavilyMu.Lock()
+	defer s.tavilyMu.Unlock()
 	if err := s.tavilyPool().SetStatus(id, st); err != nil {
 		writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
 		return

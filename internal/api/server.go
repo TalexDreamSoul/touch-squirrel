@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/grok-free-register/grok-reg/internal/acctpool"
+	"github.com/grok-free-register/grok-reg/internal/artifact"
 	"github.com/grok-free-register/grok-reg/internal/bridge"
 	"github.com/grok-free-register/grok-reg/internal/cluster"
 	"github.com/grok-free-register/grok-reg/internal/config"
@@ -56,6 +58,14 @@ type Options struct {
 	Build BuildInfo // immutable metadata for this binary
 }
 
+type artifactBackfillStatus struct {
+	Running    bool                    `json:"running"`
+	Report     artifact.BackfillReport `json:"report"`
+	Error      string                  `json:"error,omitempty"`
+	StartedAt  string                  `json:"started_at,omitempty"`
+	FinishedAt string                  `json:"finished_at,omitempty"`
+}
+
 type Server struct {
 	opt            Options
 	mux            *http.ServeMux
@@ -69,6 +79,10 @@ type Server struct {
 	hunter         *hunter.Service
 	plugins        *plugin.Manager
 	market         *plugin.Market
+	tavilyMu       sync.Mutex
+	backfillRunMu  sync.Mutex
+	backfillMu     sync.RWMutex
+	backfillStatus artifactBackfillStatus
 	registerMu     sync.Mutex
 	registerCancel context.CancelFunc
 }
@@ -174,10 +188,12 @@ func New(opt Options) *Server {
 	s.hunter = hunter.NewService(hunterPath)
 	if st, err := acctpool.Open(opt.Paths.AccountsDB); err == nil {
 		s.accounts = st
-		// one-shot auto-migration of legacy local-pool + tavily keys
+		// Force one bounded startup reconciliation. It repairs an index/source
+		// mismatch if a previous cross-store batch operation was interrupted.
 		_, _ = st.AutoMigrate(acctpool.MigrateOptions{
 			LocalPoolDir:   opt.Paths.LocalPool,
 			TavilyKeysPath: tavilypool.DefaultStatePath(opt.Paths.Root),
+			Force:          true,
 		})
 	}
 	s.routes()
@@ -188,7 +204,44 @@ func (s *Server) Handler() http.Handler {
 	return s.withAuth(s.withCORS(s.mux))
 }
 
+func (s *Server) runArtifactBackfill() {
+	if s.opt.Paths.ArtifactsDir == "" {
+		return
+	}
+	s.backfillRunMu.Lock()
+	defer s.backfillRunMu.Unlock()
+	s.backfillMu.Lock()
+	s.backfillStatus = artifactBackfillStatus{
+		Running:   true,
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	s.backfillMu.Unlock()
+
+	report, err := artifact.BackfillLegacyCredentials(
+		artifact.NewStore(s.opt.Paths.ArtifactsDir),
+		s.opt.Paths.LocalPool,
+		tavilypool.DefaultStatePath(s.opt.Paths.Root),
+	)
+	s.backfillMu.Lock()
+	s.backfillStatus.Running = false
+	s.backfillStatus.Report = report
+	s.backfillStatus.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	if err != nil {
+		s.backfillStatus.Error = err.Error()
+	}
+	s.backfillMu.Unlock()
+}
+
+func (s *Server) artifactBackfillSnapshot() artifactBackfillStatus {
+	s.backfillMu.RLock()
+	defer s.backfillMu.RUnlock()
+	return s.backfillStatus
+}
+
 func (s *Server) ListenAndServe() error {
+	if s.opt.Token == "" && !isLoopbackListenAddr(s.opt.Addr) {
+		return fmt.Errorf("PANEL_TOKEN is required when listening beyond loopback")
+	}
 	if err := s.opt.Paths.EnsureBase(); err != nil {
 		return err
 	}
@@ -233,6 +286,7 @@ func (s *Server) ListenAndServe() error {
 	defer signal.Stop(sigCh)
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
+	go s.runArtifactBackfill()
 	select {
 	case err := <-errCh:
 		return err
@@ -245,6 +299,19 @@ func (s *Server) ListenAndServe() error {
 		_ = srv.Shutdown(ctx)
 		return nil
 	}
+}
+
+func isLoopbackListenAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		return false
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (s *Server) routes() {
@@ -293,6 +360,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/pool/files", s.handlePoolFiles)
 	s.mux.HandleFunc("GET /api/pool/list", s.handleUnifiedPoolList)
 	s.mux.HandleFunc("GET /api/pool/pull", s.handleUnifiedPoolPull)
+	s.mux.HandleFunc("POST /api/pool/batch", s.handlePoolBatch)
+	s.mux.HandleFunc("POST /api/pool/batch/download", s.handlePoolBatchDownload)
 	s.mux.HandleFunc("GET /api/pool/overview", s.handlePoolOverview)
 	s.mux.HandleFunc("POST /api/pool/patrol", s.handlePoolPatrol)
 	s.mux.HandleFunc("GET /api/pool/patrol/history", s.handlePoolPatrolHistory)
@@ -413,7 +482,16 @@ func (s *Server) routes() {
 
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		sensitiveLocalOnly := strings.HasPrefix(r.URL.Path, "/api/artifacts") || strings.HasPrefix(r.URL.Path, "/api/pool/")
+		if s.opt.Token == "" && sensitiveLocalOnly {
+			if origin != "" && isLoopbackOrigin(origin) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			}
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Panel-Token, X-Status-Password, X-Cluster-Token")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
@@ -454,6 +532,27 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isLoopbackHost(raw string) bool {
+	host := strings.TrimSpace(raw)
+	if parsed, _, err := net.SplitHostPort(host); err == nil {
+		host = parsed
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func isLoopbackOrigin(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return true
+	}
+	parsed, err := url.Parse(raw)
+	return err == nil && isLoopbackHost(parsed.Host)
 }
 
 func isLoopbackRemote(remote string) bool {

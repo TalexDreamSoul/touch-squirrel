@@ -206,9 +206,15 @@ func slimName(name string) AuthMeta {
 	return AuthMeta{Name: name}
 }
 
+func validAuthFileName(name string) bool {
+	name = strings.TrimSpace(name)
+	return name != "" && len(name) <= 255 && strings.HasSuffix(strings.ToLower(name), ".json") &&
+		!strings.Contains(name, "..") && !strings.ContainsAny(name, "/\\\x00\r\n")
+}
+
 // Download fetches one auth-file's raw JSON bytes.
 func (c *Client) Download(name string) ([]byte, error) {
-	if !strings.HasSuffix(strings.ToLower(name), ".json") {
+	if !validAuthFileName(name) {
 		return nil, fmt.Errorf("invalid auth-file name %q", name)
 	}
 	ep := c.up.endpoint() + "/download?name=" + url.QueryEscape(name)
@@ -222,9 +228,13 @@ func (c *Client) Download(name string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	const maxDownloadBytes = 16 << 20
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(b) > maxDownloadBytes {
+		return nil, fmt.Errorf("download %s exceeds %d MiB", name, maxDownloadBytes>>20)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("download %s status=%d body=%s", name, resp.StatusCode, truncate(string(b), 200))
@@ -234,6 +244,9 @@ func (c *Client) Download(name string) ([]byte, error) {
 
 // Delete removes one remote auth-file.
 func (c *Client) Delete(name string) error {
+	if !validAuthFileName(name) {
+		return fmt.Errorf("invalid auth-file name %q", name)
+	}
 	ep := c.up.endpoint() + "?name=" + url.QueryEscape(name)
 	req, err := http.NewRequest(http.MethodDelete, ep, nil)
 	if err != nil {
