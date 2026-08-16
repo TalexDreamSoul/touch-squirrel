@@ -12,7 +12,9 @@ import (
 	"github.com/grok-free-register/grok-reg/internal/acctpool"
 	"github.com/grok-free-register/grok-reg/internal/config"
 	"github.com/grok-free-register/grok-reg/internal/cpa"
+	"github.com/grok-free-register/grok-reg/internal/localpool"
 	"github.com/grok-free-register/grok-reg/internal/tavilypool"
+	"github.com/grok-free-register/grok-reg/internal/transfer"
 )
 
 // handleFederationPoolList exposes the master's formal CPA pool metadata
@@ -36,7 +38,10 @@ func (s *Server) handleFederationPoolList(w http.ResponseWriter, r *http.Request
 		return
 	}
 	page, pageSize := parsePage(r, 1, 10, 100)
-	list, total, err := s.transfer.ListRemotePage("", "", true, page, pageSize)
+	remote, err := s.transfer.ListRemoteFilteredPage("", "", page, pageSize, transfer.RemoteListFilter{
+		Category: firstNonEmpty(r.URL.Query().Get("category"), r.URL.Query().Get("type")),
+		Status:   r.URL.Query().Get("status"), Q: r.URL.Query().Get("q"),
+	})
 	if err != nil {
 		writeJSON(w, 502, map[string]any{"ok": false, "error": err.Error()})
 		return
@@ -47,11 +52,13 @@ func (s *Server) handleFederationPoolList(w http.ResponseWriter, r *http.Request
 		"source":          "federation",
 		"share_pool_list": true,
 		"share_pool_pull": cfg.ClusterSharePoolPull,
-		"total":           total,
+		"total":           remote.Total,
 		"page":            page,
 		"page_size":       pageSize,
-		"total_pages":     pageCount(total, pageSize),
-		"files":           list,
+		"total_pages":     pageCount(remote.Total, pageSize),
+		"files":           remote.Items,
+		"categories":      remote.Categories,
+		"by_category":     remote.ByCategory,
 		"capabilities": map[string]bool{
 			"download":    cfg.ClusterSharePoolPull,
 			"upload_cpa":  cfg.ClusterSharePoolPull,
@@ -165,43 +172,40 @@ func (s *Server) handleUnifiedPoolList(w http.ResponseWriter, r *http.Request) {
 		})
 	case "local":
 		all := s.localPool.List()
-		total, unsynced := s.localPool.Stats()
-		start := (page - 1) * pageSize
-		if start > len(all) {
-			start = len(all)
+		totalAll, unsynced := s.localPool.Stats()
+		syncStatus := strings.ToLower(strings.TrimSpace(q.Get("sync_status")))
+		if syncStatus != "" {
+			filtered := make([]localpool.Entry, 0, len(all))
+			for _, entry := range all {
+				isSynced := entry.SyncedAt != nil
+				if (syncStatus == "synced" && isSynced) || (syncStatus == "unsynced" && !isSynced) {
+					filtered = append(filtered, entry)
+				}
+			}
+			all = filtered
 		}
-		end := start + pageSize
-		if end > len(all) {
-			end = len(all)
-		}
-		items := all[start:end]
+		total := len(all)
+		start := min((page-1)*pageSize, total)
+		end := min(start+pageSize, total)
 		writeJSON(w, 200, map[string]any{
-			"ok":           true,
-			"source":       "local",
-			"total":        total,
-			"unsynced":     unsynced,
-			"page":         page,
-			"page_size":    pageSize,
-			"total_pages":  pageCount(len(all), pageSize),
-			"items":        items,
-			"capabilities": poolCapabilities("local", true),
+			"ok": true, "source": "local", "total": total, "total_all": totalAll,
+			"synced": totalAll - unsynced, "unsynced": unsynced,
+			"page": page, "page_size": pageSize, "total_pages": pageCount(total, pageSize),
+			"items": all[start:end], "capabilities": poolCapabilities("local", true),
 		})
 	case "cloud":
-		list, total, err := s.transfer.ListRemotePage("", "", true, page, pageSize)
+		remote, err := s.transfer.ListRemoteFilteredPage("", "", page, pageSize, transfer.RemoteListFilter{
+			Category: firstNonEmpty(q.Get("category"), q.Get("type")), Status: q.Get("status"), Q: q.Get("q"),
+		})
 		if err != nil {
 			writeJSON(w, 502, map[string]any{"ok": false, "error": err.Error(), "source": "cloud"})
 			return
 		}
 		writeJSON(w, 200, map[string]any{
-			"ok":           true,
-			"source":       "cloud",
-			"total":        total,
-			"page":         page,
-			"page_size":    pageSize,
-			"total_pages":  pageCount(total, pageSize),
-			"files":        list,
-			"can_pull":     true, // local panel has CPA key
-			"capabilities": poolCapabilities("cloud", true),
+			"ok": true, "source": "cloud", "total": remote.Total,
+			"page": page, "page_size": pageSize, "total_pages": pageCount(remote.Total, pageSize),
+			"files": remote.Items, "categories": remote.Categories, "by_category": remote.ByCategory,
+			"can_pull": true, "capabilities": poolCapabilities("cloud", true),
 		})
 	case "federation", "master", "fed":
 		cfg, err := config.Load(s.opt.Paths.Config)
@@ -215,8 +219,9 @@ func (s *Server) handleUnifiedPoolList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body, status, err := federationGET(master, "/api/federation/pool", masterToken, map[string]string{
-			"page":  strconv.Itoa(page),
-			"limit": strconv.Itoa(pageSize),
+			"page": strconv.Itoa(page), "limit": strconv.Itoa(pageSize),
+			"category": firstNonEmpty(q.Get("category"), q.Get("type")),
+			"status":   q.Get("status"), "q": q.Get("q"),
 		})
 		if err != nil {
 			writeJSON(w, 502, map[string]any{"ok": false, "error": err.Error(), "source": "federation", "master": master})

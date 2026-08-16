@@ -9,8 +9,10 @@ import (
 
 	"github.com/grok-free-register/grok-reg/internal/config"
 	"github.com/grok-free-register/grok-reg/internal/cpa"
+	"github.com/grok-free-register/grok-reg/internal/jobs"
 	"github.com/grok-free-register/grok-reg/internal/localpool"
 	"github.com/grok-free-register/grok-reg/internal/state"
+	"github.com/grok-free-register/grok-reg/internal/transfer"
 )
 
 func (s *Server) handleLocalPoolList(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +68,7 @@ func (s *Server) handleLocalPoolImport(w http.ResponseWriter, r *http.Request) {
 		}
 		importedCount := recordRunImport(dir)
 		if s.shouldAutoSync() {
-			go s.syncLocalPool(false)
+			go func() { _, _, _ = s.enqueueLocalPoolUpload(false) }()
 		}
 		writeJSON(w, 200, map[string]any{
 			"ok":             true,
@@ -96,7 +98,7 @@ func (s *Server) handleLocalPoolImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.shouldAutoSync() {
-		go s.syncLocalPool(false)
+		go func() { _, _, _ = s.enqueueLocalPoolUpload(false) }()
 	}
 	writeJSON(w, 200, map[string]any{
 		"ok":      true,
@@ -111,25 +113,18 @@ func (s *Server) handleLocalPoolSync(w http.ResponseWriter, r *http.Request) {
 		All bool `json:"all"`
 	}
 	_ = decodeJSONBody(r, &body)
-
-	cfg, err := config.Load(s.opt.Paths.Config)
+	job, total, err := s.enqueueLocalPoolUpload(body.All)
 	if err != nil {
-		writeJSON(w, 500, map[string]any{"ok": false, "error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	if strings.TrimSpace(cfg.CPAManagementKey) == "" || strings.TrimSpace(cfg.CPAManagementBase) == "" {
-		writeJSON(w, 400, map[string]any{"ok": false, "error": "未配置 CPA_MANAGEMENT_BASE / KEY，无法同步到主号池"})
+	if job == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": 0, "total": 0})
 		return
 	}
-
-	okN, failN, total, samples := s.syncLocalPool(body.All)
-	writeJSON(w, 200, map[string]any{
-		"ok":      failN == 0,
-		"synced":  okN,
-		"failed":  failN,
-		"total":   total,
-		"samples": samples,
-		"target":  cfg.CPAManagementBase,
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"ok": true, "queued": total, "total": total, "job_id": job.ID,
+		"job": s.transfer.UploadSummary(job),
 	})
 }
 
@@ -138,52 +133,45 @@ func (s *Server) shouldAutoSync() bool {
 	return err == nil && cfg.LocalPoolAutoSync
 }
 
-func (s *Server) syncLocalPool(all bool) (okN, failN, total int, samples []string) {
+func (s *Server) enqueueLocalPoolUpload(all bool) (*jobs.Job, int, error) {
 	cfg, err := config.Load(s.opt.Paths.Config)
-	if err != nil || strings.TrimSpace(cfg.CPAManagementKey) == "" {
-		return 0, 0, 0, nil
+	if err != nil {
+		return nil, 0, err
 	}
-	up := cpa.NewUploader(cpa.UploadConfig{
-		Enabled:      true,
-		BaseURL:      cfg.CPAManagementBase,
-		Key:          cfg.CPAManagementKey,
-		TimeoutSec:   max(cfg.CPAUploadTimeoutSec, 30),
-		Retries:      cfg.CPAUploadRetries,
-		NameTemplate: cfg.CPAUploadNameTemplate,
-		Verify:       cfg.CPAUploadVerify,
-		Mode:         cfg.CPAUploadMode,
-	}, nil)
-
+	if strings.TrimSpace(cfg.CPAManagementKey) == "" || strings.TrimSpace(cfg.CPAManagementBase) == "" {
+		return nil, 0, fmt.Errorf("未配置 CPA_MANAGEMENT_BASE / KEY，无法同步到主号池")
+	}
 	paths := s.localPool.UnsyncedPaths()
 	if all {
 		paths = s.localPool.AllPaths()
 	}
-	total = len(paths)
-	var okNames []string
-	for _, p := range paths {
-		res := up.UploadFile(p)
-		name := filepath.Base(p)
-		if res.OK {
-			okN++
-			okNames = append(okNames, name)
-			continue
-		}
-		failN++
-		errMsg := "upload failed"
-		if res.Err != nil {
-			errMsg = res.Err.Error()
-		}
-		_ = s.localPool.MarkSynced([]string{name}, cfg.CPAManagementBase, fmt.Errorf("%s", errMsg))
-		if len(samples) < 5 {
-			samples = append(samples, name+": "+errMsg)
-		}
+	if len(paths) == 0 {
+		return nil, 0, nil
 	}
-	_ = s.localPool.MarkSynced(okNames, cfg.CPAManagementBase, nil)
-	// reindex so synced_at lands in unified accounts
-	if s.accounts != nil {
-		_, _ = s.accounts.UpsertLocalFromDir(s.opt.Paths.LocalPool)
+	files := make([]transfer.UploadFile, 0, len(paths))
+	for _, path := range paths {
+		raw, readErr := readBoundedCredential(path)
+		if readErr != nil {
+			return nil, 0, fmt.Errorf("读取 %s: %w", filepath.Base(path), readErr)
+		}
+		files = append(files, transfer.UploadFile{Name: filepath.Base(path), Content: raw})
 	}
-	return okN, failN, total, samples
+	job, err := s.transfer.PrepareUploadFiles(files, transfer.UploadOptions{
+		Source: "local-sync", SkipCached: false, SkipCachedSet: true,
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	s.transfer.SetUploadSuccessHook(job.ID, func(name string) error {
+		return s.localPool.MarkSynced([]string{name}, cfg.CPAManagementBase, nil)
+	})
+	s.transfer.SetUploadFailureHook(job.ID, func(name, message string) {
+		_ = s.localPool.MarkSynced([]string{name}, cfg.CPAManagementBase, fmt.Errorf("%s", message))
+	})
+	if !s.transfer.StartUploadJob(job, false) {
+		return nil, 0, fmt.Errorf("上传任务无法入队")
+	}
+	return job, len(files), nil
 }
 
 // autoImportLatestRun imports CPA results when auto-import is enabled.
@@ -212,7 +200,7 @@ func (s *Server) autoImportLatestRun(runID string) {
 		s.runArtifactBackfill()
 	}
 	if cfg.LocalPoolAutoSync {
-		go s.syncLocalPool(false)
+		go func() { _, _, _ = s.enqueueLocalPoolUpload(false) }()
 	}
 }
 

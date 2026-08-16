@@ -16,7 +16,7 @@ import (
 
 type UploadConfig struct {
 	Enabled      bool
-	BaseURL      string // e.g. http://localhost:8317/v0/management
+	BaseURL      string // CLIProxyAPI root URL; /v0/management is added automatically
 	Key          string
 	TimeoutSec   int
 	Retries      int
@@ -28,7 +28,7 @@ type UploadConfig struct {
 func DefaultUploadConfig() UploadConfig {
 	return UploadConfig{
 		Enabled:      false,
-		BaseURL:      "http://localhost:8317/v0/management",
+		BaseURL:      "http://localhost:8317",
 		TimeoutSec:   30,
 		Retries:      2,
 		NameTemplate: "{email}.json",
@@ -72,13 +72,14 @@ func NewUploader(cfg UploadConfig, logf func(string, ...any)) *Uploader {
 	}
 }
 
-// NormalizeManagementBase rewrites Docker-only hostnames for host-side grok,
-// and ensures the path ends with /v0/management (upload appends /auth-files).
+// NormalizeManagementBase rewrites Docker-only hostnames for host-side grok
+// and expands a CLIProxyAPI root URL to /v0/management. Legacy callers that
+// already provide the full management path remain supported.
 //
 // Examples:
 //
-//	http://cli-proxy-api:8317          → http://127.0.0.1:8317/v0/management
-//	http://localhost:8317             → http://localhost:8317/v0/management
+//	http://cli-proxy-api:8317             → http://127.0.0.1:8317/v0/management
+//	http://localhost:8317                → http://localhost:8317/v0/management
 //	http://127.0.0.1:8317/v0/management → unchanged
 func NormalizeManagementBase(raw string) string {
 	s := strings.TrimSpace(raw)
@@ -283,10 +284,14 @@ func (u *Uploader) UploadOnce(name string, raw []byte) UploadResult {
 	return u.doJSON(name, raw)
 }
 
+const cpaManagementUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+
 func (u *Uploader) authHeaders(req *http.Request) {
 	key := strings.TrimSpace(u.cfg.Key)
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("X-Management-Key", key)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", cpaManagementUserAgent)
 }
 
 func (u *Uploader) endpoint() string {

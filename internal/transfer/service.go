@@ -47,6 +47,17 @@ type Service struct {
 	// the job struct so summaries never leak the management key.
 	uploadOpts sync.Map
 
+	// Upload hooks persist source-specific bookkeeping without coupling the
+	// generic transfer package to local-pool or account stores.
+	uploadHooks        sync.Map
+	uploadFailureHooks sync.Map
+
+	// Upload jobs are serialized here; concurrency remains inside each job.
+	uploadQueueMu   sync.Mutex
+	uploadQueueCond *sync.Cond
+	uploadQueue     []uploadStart
+	uploadQueued    map[string]struct{}
+
 	// exportStates holds per-job export bookkeeping (parts, failures, dirs).
 	exportStates sync.Map
 
@@ -78,12 +89,13 @@ func (r *realClient) Debug() (int, string, error)          { return r.cl.Debug()
 // NewService builds the transfer service.
 func NewService(exportsDir, tmpDir, cachePath string, cfgFn ConfigProvider) *Service {
 	s := &Service{
-		UploadJobs: jobs.NewManager("upload", 2*time.Hour),
-		ExportJobs: jobs.NewManager("export", 7*24*time.Hour),
-		Cache:      LoadUploadCache(cachePath),
-		ExportsDir: exportsDir,
-		TmpDir:     tmpDir,
-		cfgFn:      cfgFn,
+		UploadJobs:   jobs.NewManager("upload", 2*time.Hour),
+		ExportJobs:   jobs.NewManager("export", 7*24*time.Hour),
+		Cache:        LoadUploadCache(cachePath),
+		ExportsDir:   exportsDir,
+		TmpDir:       tmpDir,
+		cfgFn:        cfgFn,
+		uploadQueued: make(map[string]struct{}),
 	}
 	s.NewClient = func(conn Connection) ManagementAPI {
 		timeoutSec := conn.TimeoutMs / 1000
@@ -102,6 +114,8 @@ func NewService(exportsDir, tmpDir, cachePath string, cfgFn ConfigProvider) *Ser
 		up := cpa.NewUploader(ucfg, nil)
 		return &realClient{cl: cl, up: up}
 	}
+	s.uploadQueueCond = sync.NewCond(&s.uploadQueueMu)
+	go s.runUploadQueue()
 	return s
 }
 

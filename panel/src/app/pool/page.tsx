@@ -56,6 +56,7 @@ type CloudPoolItem = {
   name: string;
   provider?: string;
   type?: string;
+  category?: string;
   status?: string;
   status_message?: string;
   email?: string;
@@ -126,6 +127,8 @@ type PoolBatchResponse = {
   succeeded: number;
   failed: number;
   results: PoolBatchResult[];
+  queued?: number;
+  job_id?: string;
 };
 
 type TimeField = "created_at" | "updated_at" | "last_used_at";
@@ -144,6 +147,7 @@ const DEFAULT_CAPABILITIES: Record<PoolSource, PoolCapabilities> = {
 };
 const ALL_TYPE = "全部分类";
 const ALL_STATUS = "全部状态";
+const ALL_SYNC = "全部上传状态";
 const POOL_SOURCE_LABELS: Record<PoolSource, string> = {
   accounts: "统一号池",
   local: "本地 xAI 文件",
@@ -237,9 +241,9 @@ function credentialStatusLabel(status: string) {
     case "unknown":
       return "未知";
     case "synced":
-      return "已同步";
+      return "已上传";
     case "unsynced":
-      return "未同步";
+      return "未上传";
     default:
       return status || "未知";
   }
@@ -327,6 +331,7 @@ function PoolContent() {
   const [poolSource, setPoolSource] = useState<PoolSource>("accounts");
   const [accountType, setAccountType] = useState<string>(ALL_TYPE);
   const [accountStatus, setAccountStatus] = useState<string>(ALL_STATUS);
+  const [syncStatus, setSyncStatus] = useState<string>(ALL_SYNC);
   const [credentialSearchInput, setCredentialSearchInput] = useState("");
   const [credentialQuery, setCredentialQuery] = useState("");
   const [timeField, setTimeField] = useState<TimeField>("created_at");
@@ -346,13 +351,14 @@ function PoolContent() {
   const [poolTotalPages, setPoolTotalPages] = useState(0);
   const [poolPage, setPoolPage] = useState(1);
   const [poolUnsynced, setPoolUnsynced] = useState(0);
+  const [poolSynced, setPoolSynced] = useState(0);
   const [fedCanPull, setFedCanPull] = useState(false);
   const [fedShareList, setFedShareList] = useState(true);
   const [poolError, setPoolError] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const poolRequest = useRef(0);
-  const viewKey = [tab, poolSource, masterURL, poolPage, accountType, accountStatus, credentialQuery, timeField, timeRange].join("|");
+  const viewKey = [tab, poolSource, masterURL, poolPage, accountType, accountStatus, syncStatus, credentialQuery, timeField, timeRange].join("|");
   const viewKeyRef = useRef(viewKey);
   viewKeyRef.current = viewKey;
 
@@ -390,6 +396,7 @@ function PoolContent() {
       master: string,
       typeFilter: string,
       statusFilter: string,
+      syncFilter: string,
       queryFilter: string,
       timeFieldFilter: TimeField,
       timeRangeFilter: TimeRange,
@@ -433,40 +440,50 @@ function PoolContent() {
           return;
         }
         if (source === "local") {
+          const qs = new URLSearchParams({ source: "local", page: String(page), limit: String(PAGE_SIZE) });
+          if (syncFilter && syncFilter !== ALL_SYNC) qs.set("sync_status", syncFilter);
           const lp = await api<{
             items?: LocalPoolItem[];
             total?: number;
+            synced?: number;
             unsynced?: number;
             total_pages?: number;
             capabilities?: PoolCapabilities;
-          }>(`/api/pool/list?source=local&page=${page}&limit=${PAGE_SIZE}`);
+          }>(`/api/pool/list?${qs.toString()}`);
           if (request !== poolRequest.current) return;
           setLocalItems(lp.items || []);
           setAccountItems([]);
           setCloudItems([]);
           setPoolTotal(lp.total || 0);
+          setPoolSynced(lp.synced || 0);
           setPoolUnsynced(lp.unsynced || 0);
           setPoolTotalPages(lp.total_pages || 0);
+          setTypeCounts({});
+          setAvailableTypes([]);
           setCapabilities(lp.capabilities || DEFAULT_CAPABILITIES.local);
           setFedCanPull(false);
           setFedShareList(true);
           return;
         }
         if (source === "cloud") {
+          const qs = new URLSearchParams({ source: "cloud", page: String(page), limit: String(PAGE_SIZE) });
+          if (typeFilter && typeFilter !== ALL_TYPE) qs.set("category", typeFilter);
+          if (statusFilter && statusFilter !== ALL_STATUS) qs.set("status", statusFilter);
+          if (queryFilter.trim()) qs.set("q", queryFilter.trim());
           const cp = await api<{
-            files?: CloudPoolItem[];
-            total?: number;
-            total_pages?: number;
-            can_pull?: boolean;
-            capabilities?: PoolCapabilities;
-          }>(`/api/pool/list?source=cloud&page=${page}&limit=${PAGE_SIZE}`);
+            files?: CloudPoolItem[]; total?: number; total_pages?: number; can_pull?: boolean;
+            categories?: string[]; by_category?: Record<string, number>; capabilities?: PoolCapabilities;
+          }>(`/api/pool/list?${qs.toString()}`);
           if (request !== poolRequest.current) return;
           setCloudItems(cp.files || []);
           setLocalItems([]);
           setAccountItems([]);
           setPoolTotal(cp.total || 0);
           setPoolTotalPages(cp.total_pages || 0);
+          setPoolSynced(0);
           setPoolUnsynced(0);
+          setAvailableTypes(cp.categories || []);
+          setTypeCounts(cp.by_category || {});
           setFedCanPull(cp.can_pull !== false);
           setCapabilities(cp.capabilities || DEFAULT_CAPABILITIES.cloud);
           setFedShareList(true);
@@ -482,23 +499,27 @@ function PoolContent() {
           setPoolError("请选择联邦主节点");
           return;
         }
+        const qs = new URLSearchParams({
+          source: "federation", master, page: String(page), limit: String(PAGE_SIZE),
+        });
+        if (typeFilter && typeFilter !== ALL_TYPE) qs.set("category", typeFilter);
+        if (statusFilter && statusFilter !== ALL_STATUS) qs.set("status", statusFilter);
+        if (queryFilter.trim()) qs.set("q", queryFilter.trim());
         const fp = await api<{
-          files?: CloudPoolItem[];
-          total?: number;
-          total_pages?: number;
-          share_pool_list?: boolean;
-          share_pool_pull?: boolean;
-          capabilities?: PoolCapabilities;
-        }>(
-          `/api/pool/list?source=federation&master=${encodeURIComponent(master)}&page=${page}&limit=${PAGE_SIZE}`,
-        );
+          files?: CloudPoolItem[]; total?: number; total_pages?: number;
+          share_pool_list?: boolean; share_pool_pull?: boolean;
+          categories?: string[]; by_category?: Record<string, number>; capabilities?: PoolCapabilities;
+        }>(`/api/pool/list?${qs.toString()}`);
         if (request !== poolRequest.current) return;
         setCloudItems(fp.files || []);
         setLocalItems([]);
         setAccountItems([]);
         setPoolTotal(fp.total || 0);
         setPoolTotalPages(fp.total_pages || 0);
+        setPoolSynced(0);
         setPoolUnsynced(0);
+        setAvailableTypes(fp.categories || []);
+        setTypeCounts(fp.by_category || {});
         setFedShareList(fp.share_pool_list !== false);
         setFedCanPull(!!fp.share_pool_pull);
         setCapabilities(fp.capabilities || {
@@ -543,6 +564,7 @@ function PoolContent() {
       masterURL,
       accountType,
       accountStatus,
+      syncStatus,
       credentialQuery,
       timeField,
       timeRange,
@@ -554,6 +576,7 @@ function PoolContent() {
     masterURL,
     accountType,
     accountStatus,
+    syncStatus,
     credentialQuery,
     timeField,
     timeRange,
@@ -562,7 +585,7 @@ function PoolContent() {
 
   useEffect(() => {
     setSelected(new Set());
-  }, [poolSource, masterURL, accountType, accountStatus, credentialQuery, timeField, timeRange]);
+  }, [poolSource, masterURL, accountType, accountStatus, syncStatus, credentialQuery, timeField, timeRange]);
 
   useEffect(() => {
     if (tab !== "patrol") return;
@@ -574,12 +597,14 @@ function PoolContent() {
   async function syncLocal() {
     setBusy(true);
     try {
-      const d = await api<{ synced?: number; failed?: number; total?: number }>(
+      const d = await api<{ queued?: number; total?: number; job_id?: string }>(
         "/api/local-pool/sync",
         { method: "POST", body: JSON.stringify({ all: false }) },
       );
       setMsg(
-        `同步完成：成功 ${d.synced ?? 0} / 失败 ${d.failed ?? 0}（共 ${d.total ?? 0}）`,
+        d.queued
+          ? `已将 ${d.queued} 条未上传凭证加入队列 · ${d.job_id || "上传任务"}`
+          : "没有待上传凭证",
       );
       await refreshPool(
         poolPage,
@@ -587,6 +612,7 @@ function PoolContent() {
         masterURL,
         accountType,
         accountStatus,
+        syncStatus,
         credentialQuery,
         timeField,
         timeRange,
@@ -614,6 +640,7 @@ function PoolContent() {
         masterURL,
         accountType,
         accountStatus,
+        syncStatus,
         credentialQuery,
         timeField,
         timeRange,
@@ -721,7 +748,7 @@ function PoolContent() {
     return cloudItems.map((item) => ({
       key: `${poolSource}:${item.name}`,
       id: item.name,
-      type: item.type || item.provider || "CPA",
+      type: item.category || item.type || item.provider || "CPA",
       email: item.email,
       source: poolSource === "cloud" ? "云端 CPA" : "联邦主节点",
       plugin: item.provider,
@@ -805,6 +832,10 @@ function PoolContent() {
         (response.results || []).filter((result) => !result.ok).map((result) => result.id),
       );
       setSelected(failedIDs);
+      if (action === "upload_cpa" && response.job_id) {
+        setMsg(`已将 ${response.queued || response.succeeded || 0} 条凭证加入上传队列 · ${response.job_id}`);
+        return;
+      }
       const actionLabel = {
         enable: "启用",
         disable: "停用",
@@ -826,6 +857,7 @@ function PoolContent() {
           operationMaster,
           accountType,
           accountStatus,
+          syncStatus,
           credentialQuery,
           timeField,
           timeRange,
@@ -913,10 +945,10 @@ function PoolContent() {
                   size="sm"
                   variant="secondary"
                   loading={busy}
-                  disabled={controlsBusy || busy}
+                  disabled={controlsBusy || busy || poolUnsynced === 0}
                   onClick={() => void syncLocal()}
                 >
-                  同步未上传到云端
+                  一键上传未上传{poolUnsynced ? `（${poolUnsynced}）` : ""}
                 </Button>
               ) : null}
             </>
@@ -1045,6 +1077,7 @@ function PoolContent() {
                       masterURL,
                       accountType,
                       accountStatus,
+                      syncStatus,
                       credentialQuery,
                       timeField,
                       timeRange,
@@ -1070,6 +1103,11 @@ function PoolContent() {
                         ([, label]) => label === value,
                       )?.[0] || "accounts") as PoolSource;
                       setPoolSource(nextSource);
+                      setAccountType(ALL_TYPE);
+                      setAccountStatus(ALL_STATUS);
+                      setSyncStatus(ALL_SYNC);
+                      setCredentialSearchInput("");
+                      setCredentialQuery("");
                       beginPoolViewChange();
                       setPoolPage(1);
                     }}
@@ -1083,14 +1121,14 @@ function PoolContent() {
                     )}
                   </Select>
                 </div>
-                {poolSource === "accounts" ? (
+                {poolSource !== "local" ? (
                   <>
                     <div className="min-w-56 flex-1">
                       <Input
                         label="搜索"
                         disabled={controlsBusy}
                         value={credentialSearchInput}
-                        placeholder="凭证 ID、邮箱、账号、文件名"
+                        placeholder="文件名、邮箱、账号、分类"
                         onChange={(event) => setCredentialSearchInput(event.target.value)}
                         onKeyDown={(event) => {
                           if (event.key === "Enter") applyCredentialSearch();
@@ -1152,8 +1190,11 @@ function PoolContent() {
                         <Select.Option value="disabled">已停用</Select.Option>
                         <Select.Option value="exhausted">已耗尽</Select.Option>
                         <Select.Option value="unknown">未知</Select.Option>
+                        <Select.Option value="error">异常</Select.Option>
                       </Select>
                     </div>
+                    {poolSource === "accounts" ? (
+                      <>
                     <div className="min-w-36">
                       <Select
                         label="时间字段"
@@ -1218,7 +1259,28 @@ function PoolContent() {
                         <Select.Option value="最近 90 天">最近 90 天</Select.Option>
                       </Select>
                     </div>
+                      </>
+                    ) : null}
                   </>
+                ) : null}
+                {poolSource === "local" ? (
+                  <div className="min-w-40">
+                    <Select
+                      label="上传状态"
+                      disabled={controlsBusy}
+                      value={syncStatus === ALL_SYNC ? "全部" : syncStatus === "synced" ? "已上传" : "未上传"}
+                      onValueChange={(value) => {
+                        if (!value) return;
+                        setSyncStatus(value === "已上传" ? "synced" : value === "未上传" ? "unsynced" : ALL_SYNC);
+                        beginPoolViewChange();
+                        setPoolPage(1);
+                      }}
+                    >
+                      <Select.Option value="全部">全部</Select.Option>
+                      <Select.Option value="已上传">已上传（{poolSynced}）</Select.Option>
+                      <Select.Option value="未上传">未上传（{poolUnsynced}）</Select.Option>
+                    </Select>
+                  </div>
                 ) : null}
                 {poolSource === "federation" ? (
                   <div className="min-w-64 flex-1">

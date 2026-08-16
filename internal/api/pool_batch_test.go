@@ -18,6 +18,18 @@ import (
 	"github.com/grok-free-register/grok-reg/internal/config"
 )
 
+func waitForUploadCount(t *testing.T, uploads *atomic.Int32, want int32) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if uploads.Load() >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("uploads=%d want at least %d", uploads.Load(), want)
+}
+
 func TestPoolBatchAccountLifecycle(t *testing.T) {
 	server, _, paths := newArtifactTestServer(t)
 	runDir := filepath.Join(paths.Outputs, "run-batch")
@@ -120,9 +132,10 @@ func TestPoolBatchAccountLifecycle(t *testing.T) {
 	}
 	appendTestConfigSecret(t, paths.Config, "CPA_MANAGEMENT_KEY=test-key\n")
 	response = artifactRequest(server, http.MethodPost, "/api/pool/batch", batchBody("upload_cpa", []string{accountID}))
-	if response.Code != http.StatusOK || uploads.Load() != 1 || !strings.Contains(response.Body.String(), `"succeeded":1`) {
-		t.Fatalf("upload status=%d uploads=%d body=%s", response.Code, uploads.Load(), response.Body.String())
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"job_id":`) || !strings.Contains(response.Body.String(), `"queued":1`) {
+		t.Fatalf("upload queue status=%d body=%s", response.Code, response.Body.String())
 	}
+	waitForUploadCount(t, &uploads, 1)
 
 	response = artifactRequest(server, http.MethodPost, "/api/pool/batch", batchBody("delete", []string{accountID}))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"succeeded":1`) {
@@ -219,9 +232,10 @@ func TestPoolBatchCloudAndFederation(t *testing.T) {
 		"source": "federation", "action": "upload_cpa", "ids": []string{"federation.json"}, "master": master.URL,
 	})
 	response = artifactRequest(server, http.MethodPost, "/api/pool/batch", bytes.NewReader(uploadBody))
-	if response.Code != http.StatusOK || uploads.Load() != 1 || !strings.Contains(response.Body.String(), `"succeeded":1`) {
-		t.Fatalf("federation upload status=%d uploads=%d body=%s", response.Code, uploads.Load(), response.Body.String())
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"job_id":`) || !strings.Contains(response.Body.String(), `"queued":1`) {
+		t.Fatalf("federation upload queue status=%d body=%s", response.Code, response.Body.String())
 	}
+	waitForUploadCount(t, &uploads, 1)
 
 	var attackerHits atomic.Int32
 	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

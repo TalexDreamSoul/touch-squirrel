@@ -68,6 +68,7 @@ export default function SettingsPage() {
   const [cfg, setCfg] = useState<PanelConfig>({});
   const [savedSnap, setSavedSnap] = useState("");
   const [cpaKey, setCpaKey] = useState("");
+  const [savedCpaKey, setSavedCpaKey] = useState("");
   const [resinToken, setResinToken] = useState("");
   const [mailRouterAPIKey, setMailRouterAPIKey] = useState("");
   const [duckMailKey, setDuckMailKey] = useState("");
@@ -87,10 +88,11 @@ export default function SettingsPage() {
   const [repositoryBusy, setRepositoryBusy] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [cpaTestBusy, setCpaTestBusy] = useState(false);
+  const [cpaTestResult, setCpaTestResult] = useState<string | null>(null);
   const [buildInfo, setBuildInfo] = useState<NonNullable<Health["build"]> | null>(null);
 
   const secrets = [
-    cpaKey,
     resinToken,
     mailRouterAPIKey,
     duckMailKey,
@@ -103,6 +105,7 @@ export default function SettingsPage() {
     yydsJWT,
   ];
   const dirty =
+    cpaKey.trim() !== savedCpaKey ||
     secrets.some((s) => s.trim() !== "") ||
     (savedSnap !== "" && snapshotOf(cfg) !== savedSnap);
   const emailMode = String(cfg.email_mode || "tempmail");
@@ -120,7 +123,11 @@ export default function SettingsPage() {
 
   async function load() {
     const d = await api<{ config: PanelConfig }>("/api/config");
-    const next = d.config || {};
+    const next = { ...(d.config || {}) };
+    const revealedCpaKey = String(next.cpa_management_key || "");
+    delete next.cpa_management_key;
+    setCpaKey(revealedCpaKey);
+    setSavedCpaKey(revealedCpaKey);
     setCfg(next);
     setSavedSnap(snapshotOf(next));
   }
@@ -224,7 +231,7 @@ export default function SettingsPage() {
         cleanup_backup: cfg.cleanup_backup !== false,
         cleanup_dry_run: !!cfg.cleanup_dry_run,
       };
-      if (cpaKey.trim()) body.cpa_management_key = cpaKey.trim();
+      if (cpaKey.trim() && cpaKey.trim() !== savedCpaKey) body.cpa_management_key = cpaKey.trim();
       if (resinToken.trim()) body.resin_token = resinToken.trim();
       if (mailRouterAPIKey.trim()) body.mail_router_api_key = mailRouterAPIKey.trim();
       if (duckMailKey.trim()) body.duckmail_key = duckMailKey.trim();
@@ -236,7 +243,6 @@ export default function SettingsPage() {
       if (yydsKey.trim()) body.yyds_key = yydsKey.trim();
       if (yydsJWT.trim()) body.yyds_jwt = yydsJWT.trim();
       await api("/api/config", { method: "PUT", body: JSON.stringify(body) });
-      setCpaKey("");
       setResinToken("");
       setMailRouterAPIKey("");
       setDuckMailKey("");
@@ -379,14 +385,24 @@ export default function SettingsPage() {
   }
 
   async function testConn() {
-    setBusy(true);
+    setCpaTestBusy(true);
+    setCpaTestResult(null);
     try {
-      await api("/api/pool/test-connection", { method: "POST", body: "{}" });
-      setMsg("CPA 连接正常");
+      const response = await api<{ ok: boolean; error?: string }>(
+        "/api/pool/test-connection",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            baseUrl: String(cfg.cpa_management_base || "").trim(),
+            managementKey: cpaKey.trim() || undefined,
+          }),
+        },
+      );
+      setCpaTestResult(response.ok ? "CPA 连接正常" : `测试失败：${response.error || "连接失败"}`);
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "连接失败");
+      setCpaTestResult(`测试失败：${e instanceof Error ? e.message : "连接失败"}`);
     } finally {
-      setBusy(false);
+      setCpaTestBusy(false);
     }
   }
 
@@ -408,14 +424,6 @@ export default function SettingsPage() {
           tab === "plugins" ? undefined : (
             <>
               {dirty ? <Badge variant="primary">未保存</Badge> : null}
-              <Button
-                size="sm"
-                variant="secondary"
-                loading={busy}
-                onClick={() => void testConn()}
-              >
-                测试 CPA
-              </Button>
               <Button size="sm" loading={busy} onClick={() => void save()}>
                 保存
               </Button>
@@ -921,27 +929,39 @@ export default function SettingsPage() {
                   label="Base URL"
                   value={String(cfg.cpa_management_base || "")}
                   onChange={(e) => setField("cpa_management_base", e.target.value)}
-                  placeholder="http://127.0.0.1:8317/v0/management"
+                  placeholder="http://127.0.0.1:8317"
                 />
                 <Input
                   label="Management Key"
-                  type="password"
+                  type="text"
                   value={cpaKey}
                   onChange={(e) => setCpaKey(e.target.value)}
-                  placeholder={
-                    cfg.cpa_management_key_set
-                      ? "已设置 · 留空不改"
-                      : "Management Key"
-                  }
+                  placeholder="Management Key"
                 />
                 <Switch
                   label="注册成功自动上传"
                   checked={!!cfg.cpa_upload_enabled}
                   onCheckedChange={(v) => setField("cpa_upload_enabled", !!v)}
                 />
-                <Text size="xs" variant="secondary">
-                  改完可用右上角「测试 CPA」验证连通性。
-                </Text>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    {cpaTestResult ? (
+                      <Text size="xs">{cpaTestResult}</Text>
+                    ) : (
+                      <Text size="xs" variant="secondary">
+                        完整 Key 仅在本机地址返显；根地址自动补 /v0/management。
+                      </Text>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={cpaTestBusy}
+                    onClick={() => void testConn()}
+                  >
+                    测试 CPA
+                  </Button>
+                </div>
               </div>
             </LayerCard.Primary>
           </LayerCard>

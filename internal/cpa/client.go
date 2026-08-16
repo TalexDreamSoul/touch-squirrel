@@ -15,6 +15,7 @@ type AuthMeta struct {
 	Name          string `json:"name"`
 	Provider      string `json:"provider"`
 	Type          string `json:"type,omitempty"`
+	Category      string `json:"category,omitempty"`
 	Status        string `json:"status,omitempty"`
 	StatusMessage string `json:"status_message,omitempty"`
 	Email         string `json:"email,omitempty"`
@@ -159,7 +160,39 @@ func slimMeta(m map[string]any) AuthMeta {
 	if v, ok := m["disabled"].(bool); ok {
 		meta.Disabled = v
 	}
+	meta.Category = authCategory(meta.Provider, meta.Type, meta.Name)
 	return meta
+}
+
+func authCategory(provider, typ, name string) string {
+	values := []string{strings.ToLower(provider), strings.ToLower(typ), strings.ToLower(name)}
+	joined := strings.Join(values, " ")
+	for _, category := range []struct {
+		name    string
+		markers []string
+	}{
+		{name: "grok", markers: []string{"grok", "xai"}},
+		{name: "codex", markers: []string{"codex", "openai"}},
+		{name: "claude", markers: []string{"claude", "anthropic"}},
+		{name: "gemini", markers: []string{"gemini", "google"}},
+		{name: "qwen", markers: []string{"qwen"}},
+		{name: "iflow", markers: []string{"iflow"}},
+		{name: "antigravity", markers: []string{"antigravity"}},
+		{name: "github", markers: []string{"github"}},
+	} {
+		for _, marker := range category.markers {
+			if strings.Contains(joined, marker) {
+				return category.name
+			}
+		}
+	}
+	for _, value := range values[:2] {
+		value = strings.TrimSpace(value)
+		if value != "" && value != "oauth" {
+			return value
+		}
+	}
+	return "unknown"
 }
 
 // IsQuotaExhausted reports free-usage / quota exhaustion (not transient 429 alone).
@@ -203,7 +236,7 @@ func slimName(name string) AuthMeta {
 	if name == "" || !strings.HasSuffix(strings.ToLower(name), ".json") {
 		return AuthMeta{}
 	}
-	return AuthMeta{Name: name}
+	return AuthMeta{Name: name, Category: authCategory("", "", name)}
 }
 
 func validAuthFileName(name string) bool {

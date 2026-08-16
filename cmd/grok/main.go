@@ -591,7 +591,7 @@ func cmdUpload() error {
 		return fmt.Errorf("未配置 CPA_MANAGEMENT_KEY（在 ~/.grok/config.env 或环境变量中设置）")
 	}
 	if strings.TrimSpace(cfg.CPAManagementBase) == "" {
-		cfg.CPAManagementBase = "http://localhost:8317/v0/management"
+		cfg.CPAManagementBase = "http://localhost:8317"
 	}
 
 	runs, err := cpa.ListRunDirs(p.Outputs, 10)

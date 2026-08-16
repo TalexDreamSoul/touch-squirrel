@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -674,4 +675,96 @@ func (s *Service) ListRemotePage(baseURL, key string, force bool, page, pageSize
 		end = total
 	}
 	return list[start:end], total, nil
+}
+
+// RemoteListFilter filters the CPA credential inventory before pagination.
+type RemoteListFilter struct {
+	Category string
+	Status   string
+	Q        string
+}
+
+// RemoteListPage is one filtered CPA inventory page plus category facets.
+type RemoteListPage struct {
+	Items      []cpa.AuthMeta
+	Total      int
+	Categories []string
+	ByCategory map[string]int
+}
+
+func (s *Service) ListRemoteFilteredPage(baseURL, key string, page, pageSize int, filter RemoteListFilter) (RemoteListPage, error) {
+	conn := s.ResolveConnection(baseURL, key)
+	if conn.Key == "" {
+		return RemoteListPage{}, fmt.Errorf("未配置 Management Key")
+	}
+	conn.TimeoutMs = max(conn.TimeoutMs, 120000)
+	all, err := s.NewClient(conn).List()
+	if err != nil {
+		return RemoteListPage{}, err
+	}
+	byCategory := make(map[string]int)
+	for _, meta := range all {
+		byCategory[meta.Category]++
+	}
+	categories := make([]string, 0, len(byCategory))
+	for category := range byCategory {
+		categories = append(categories, category)
+	}
+	sort.Strings(categories)
+	filtered := make([]cpa.AuthMeta, 0, len(all))
+	for _, meta := range all {
+		if remoteMetaMatches(meta, filter) {
+			filtered = append(filtered, meta)
+		}
+	}
+	if page < 1 {
+		page = 1
+	}
+	pageSize = clampInt(pageSize, 50, 1, 100)
+	start := min((page-1)*pageSize, len(filtered))
+	end := min(start+pageSize, len(filtered))
+	return RemoteListPage{
+		Items: filtered[start:end], Total: len(filtered), Categories: categories, ByCategory: byCategory,
+	}, nil
+}
+
+func remoteMetaMatches(meta cpa.AuthMeta, filter RemoteListFilter) bool {
+	category := strings.ToLower(strings.TrimSpace(filter.Category))
+	if category != "" && category != strings.ToLower(meta.Category) {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(filter.Status))
+	actualStatus := strings.ToLower(strings.TrimSpace(meta.Status))
+	if status != "" {
+		switch status {
+		case "active":
+			if meta.Disabled || !(actualStatus == "" || actualStatus == "active" || actualStatus == "ok" || actualStatus == "valid") {
+				return false
+			}
+		case "disabled":
+			if !meta.Disabled {
+				return false
+			}
+		case "exhausted":
+			if !cpa.IsQuotaExhausted(meta.Status, meta.StatusMessage) {
+				return false
+			}
+		case "error":
+			if meta.Disabled || !(strings.Contains(actualStatus, "error") || strings.Contains(actualStatus, "fail") || strings.Contains(actualStatus, "invalid")) {
+				return false
+			}
+		default:
+			if actualStatus != status {
+				return false
+			}
+		}
+	}
+	query := strings.ToLower(strings.TrimSpace(filter.Q))
+	if query == "" {
+		return true
+	}
+	haystack := strings.ToLower(strings.Join([]string{
+		meta.Name, meta.Email, meta.Provider, meta.Type, meta.Category, meta.Status, meta.StatusMessage,
+	}, " "))
+	return strings.Contains(haystack, query)
 }

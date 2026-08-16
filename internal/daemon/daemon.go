@@ -62,6 +62,11 @@ func TryLock(lockPath string) (func(), error) {
 
 // StartBackground re-execs self with --worker and returns child PID.
 func StartBackground(target int, runID string) (int, error) {
+	return StartBackgroundWithEnv(target, runID, nil)
+}
+
+// StartBackgroundWithEnv starts a worker with explicit environment overrides.
+func StartBackgroundWithEnv(target int, runID string, extraEnv map[string]string) (int, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return 0, err
@@ -75,12 +80,25 @@ func StartBackground(target int, runID string) (int, error) {
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 	cmd.Env = os.Environ()
+	for key, value := range extraEnv {
+		prefix := key + "="
+		replaced := false
+		for index, current := range cmd.Env {
+			if strings.HasPrefix(current, prefix) {
+				cmd.Env[index] = prefix + value
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			cmd.Env = append(cmd.Env, prefix+value)
+		}
+	}
 	configureBackground(cmd)
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
 	pid := cmd.Process.Pid
-	// Release child so parent can exit without waiting.
 	_ = cmd.Process.Release()
 	return pid, nil
 }

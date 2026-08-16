@@ -933,6 +933,10 @@ func (s *Server) ensurePipelineStart(target int) (runID string, pid int, logPath
 	if _, err := os.Stat(s.opt.Paths.Config); os.IsNotExist(err) {
 		_ = config.Save(s.opt.Paths.Config, config.Defaults())
 	}
+	cfg, cfgErr := config.Load(s.opt.Paths.Config)
+	if cfgErr != nil {
+		return "", 0, "", cfgErr
+	}
 
 	runID = home.NewRunID()
 	_ = os.MkdirAll(s.opt.Paths.LogsDir, 0o700)
@@ -947,7 +951,11 @@ func (s *Server) ensurePipelineStart(target int) (runID string, pid int, logPath
 		}
 	})
 
-	pid, err = daemon.StartBackground(target, runID)
+	extraEnv := map[string]string{}
+	if cfg.CPAUploadEnabled {
+		extraEnv["SQUIRREL_DEFER_CPA_UPLOAD"] = "1"
+	}
+	pid, err = daemon.StartBackgroundWithEnv(target, runID, extraEnv)
 	if err != nil {
 		_ = st.Set(func(snap *state.Snapshot) {
 			snap.Status = state.StatusFailed
@@ -958,7 +966,39 @@ func (s *Server) ensurePipelineStart(target int) (runID string, pid int, logPath
 	}
 	_ = daemon.WritePID(s.opt.Paths.PID, pid)
 	_ = st.Set(func(snap *state.Snapshot) { snap.PID = pid })
+	if cfg.CPAUploadEnabled || cfg.LocalPoolAutoImport {
+		go s.enqueueRunUploadAfterExit(runID, pid)
+	}
 	return runID, pid, logPath, nil
+}
+
+func (s *Server) enqueueRunUploadAfterExit(runID string, pid int) {
+	deadline := time.NewTimer(48 * time.Hour)
+	ticker := time.NewTicker(time.Second)
+	defer deadline.Stop()
+	defer ticker.Stop()
+	for daemon.PIDAlive(pid) {
+		select {
+		case <-deadline.C:
+			return
+		case <-ticker.C:
+		}
+	}
+	cfg, err := config.Load(s.opt.Paths.Config)
+	if err != nil {
+		return
+	}
+	s.autoImportLatestRun(runID)
+	if !cfg.CPAUploadEnabled || (cfg.LocalPoolAutoImport && cfg.LocalPoolAutoSync) {
+		return
+	}
+	job, err := s.transfer.PrepareUploadFolder(filepath.Join(s.opt.Paths.Outputs, runID, "CPA"), transfer.UploadOptions{
+		Source: "auto-run", RunID: runID,
+	})
+	if err != nil {
+		return
+	}
+	s.transfer.StartUploadJob(job, false)
 }
 
 // pipelineRunning reports whether the registration worker is alive.
@@ -1391,6 +1431,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"cluster_share_infrastructure":   cfg.ClusterShareInfrastructure,
 		"local_pool_auto_import":         cfg.LocalPoolAutoImport,
 		"local_pool_auto_sync":           cfg.LocalPoolAutoSync,
+	}
+	if isLoopbackRemote(r.RemoteAddr) && isLoopbackHost(r.Host) {
+		view["cpa_management_key"] = cfg.CPAManagementKey
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "config": view})
 }

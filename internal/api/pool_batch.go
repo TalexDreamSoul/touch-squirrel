@@ -16,6 +16,7 @@ import (
 	"github.com/grok-free-register/grok-reg/internal/config"
 	"github.com/grok-free-register/grok-reg/internal/cpa"
 	"github.com/grok-free-register/grok-reg/internal/tavilypool"
+	"github.com/grok-free-register/grok-reg/internal/transfer"
 )
 
 const (
@@ -142,6 +143,10 @@ func (s *Server) handlePoolBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if request.Action == "upload_cpa" {
+		s.enqueuePoolUpload(w, request, accounts, cfg)
+		return
+	}
 
 	results := make([]poolBatchItemResult, 0, len(request.IDs))
 	succeeded := 0
@@ -163,6 +168,61 @@ func (s *Server) handlePoolBatch(w http.ResponseWriter, r *http.Request) {
 		"succeeded": succeeded,
 		"failed":    len(request.IDs) - succeeded,
 		"results":   results,
+	})
+}
+
+func (s *Server) enqueuePoolUpload(w http.ResponseWriter, request poolBatchRequest, accounts map[string]acctpool.Account, cfg config.Config) {
+	files := make([]transfer.UploadFile, 0, len(request.IDs))
+	results := make([]poolBatchItemResult, 0, len(request.IDs))
+	for _, id := range request.IDs {
+		if request.Source == "accounts" && accounts[id].Type != acctpool.TypeXAI {
+			results = append(results, poolBatchItemResult{ID: id, Error: fmt.Sprintf("credential type %s is not CPA-compatible", accounts[id].Type)})
+			continue
+		}
+		name, raw, err := s.readPoolBatchCredential(request, id, accounts[id], nil)
+		if err != nil {
+			results = append(results, poolBatchItemResult{ID: id, Error: err.Error()})
+			continue
+		}
+		files = append(files, transfer.UploadFile{Name: name, Content: raw})
+		results = append(results, poolBatchItemResult{ID: id, OK: true})
+	}
+	failed := len(request.IDs) - len(files)
+	if len(files) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"ok": false, "source": request.Source, "action": request.Action,
+			"total": len(request.IDs), "succeeded": 0, "failed": failed, "results": results,
+			"error": "没有可加入上传队列的凭证",
+		})
+		return
+	}
+	opts := transfer.UploadOptions{Source: "pool:" + request.Source}
+	if request.Source == "local" {
+		opts.SkipCachedSet = true
+		opts.SkipCached = false
+	}
+	job, err := s.transfer.PrepareUploadFiles(files, opts)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if request.Source == "local" {
+		s.transfer.SetUploadSuccessHook(job.ID, func(name string) error {
+			return s.localPool.MarkSynced([]string{name}, cfg.CPAManagementBase, nil)
+		})
+		s.transfer.SetUploadFailureHook(job.ID, func(name, message string) {
+			_ = s.localPool.MarkSynced([]string{name}, cfg.CPAManagementBase, fmt.Errorf("%s", message))
+		})
+	}
+	if !s.transfer.StartUploadJob(job, false) {
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "上传任务无法入队"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"ok": failed == 0, "source": request.Source, "action": request.Action,
+		"total": len(request.IDs), "succeeded": len(files), "failed": failed,
+		"queued": len(files), "results": results, "job_id": job.ID,
+		"job": s.transfer.UploadSummary(job),
 	})
 }
 

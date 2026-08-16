@@ -1,9 +1,11 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/grok-free-register/grok-reg/internal/jobs"
 	"github.com/grok-free-register/grok-reg/internal/transfer"
@@ -208,13 +210,35 @@ func (s *Server) handlePoolTestConnection(w http.ResponseWriter, r *http.Request
 		ManagementKey string `json:"managementKey"`
 	}
 	_ = decodeJSONBody(r, &body)
-	status, _, err := s.transfer.TestConnection(body.BaseURL, body.ManagementKey)
+	status, responseBody, err := s.transfer.TestConnection(body.BaseURL, body.ManagementKey)
 	if err != nil {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	if status < 200 || status >= 300 {
-		writeJSON(w, 200, map[string]any{"ok": false, "error": fmt.Sprintf("HTTP %d", status)})
+		detail := strings.TrimSpace(responseBody)
+		if detail != "" {
+			var remoteError struct {
+				Error   string `json:"error"`
+				Message string `json:"message"`
+			}
+			if json.Unmarshal([]byte(detail), &remoteError) == nil {
+				if remoteError.Error != "" {
+					detail = remoteError.Error
+				} else if remoteError.Message != "" {
+					detail = remoteError.Message
+				}
+			}
+			runes := []rune(detail)
+			if len(runes) > 300 {
+				detail = string(runes[:300]) + "…"
+			}
+		}
+		message := fmt.Sprintf("HTTP %d", status)
+		if detail != "" {
+			message += ": " + detail
+		}
+		writeJSON(w, 200, map[string]any{"ok": false, "error": message})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})

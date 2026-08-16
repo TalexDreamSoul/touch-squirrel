@@ -655,6 +655,11 @@ export default function RegisterPage() {
   }
 
   const sortedAccounts = useMemo(() => [...(runMetrics?.accounts || [])].sort((a, b) => (b.duration_ms || 0) - (a.duration_ms || 0)), [runMetrics]);
+  const liveDone = status?.done ?? status?.success ?? 0;
+  const liveFailed = status?.fail_count ?? status?.fail ?? 0;
+  const liveTarget = status?.target ?? 0;
+  const liveProgress = liveTarget > 0 ? Math.min(100, Math.round((liveDone / liveTarget) * 100)) : 0;
+  const liveSuccessRate = liveDone + liveFailed > 0 ? (liveDone / (liveDone + liveFailed)) * 100 : 0;
 
   return (
     <AdminShell>
@@ -672,7 +677,7 @@ export default function RegisterPage() {
 
       {msg ? <div className="mb-3 rounded-md bg-kumo-contrast/5 px-3 py-2"><Text>{msg}</Text></div> : null}
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-4">
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
         <LayerCard>
           <LayerCard.Secondary>当前状态</LayerCard.Secondary>
           <LayerCard.Primary className="p-4">
@@ -683,19 +688,30 @@ export default function RegisterPage() {
           </LayerCard.Primary>
         </LayerCard>
         <LayerCard>
-          <LayerCard.Secondary>进度</LayerCard.Secondary>
-          <LayerCard.Primary className="p-4"><Text size="sm">{status?.done ?? 0}/{status?.target ?? 0}{status?.fail_count ? ` · 失败 ${status.fail_count}` : ""}</Text></LayerCard.Primary>
+          <LayerCard.Secondary>实时进度</LayerCard.Secondary>
+          <LayerCard.Primary className="p-4">
+            <Text size="sm">{liveDone}/{liveTarget}{liveFailed ? ` · 失败 ${liveFailed}` : ""}</Text>
+            <progress className="w-full" max={100} value={liveProgress} aria-label="注册任务进度" />
+          </LayerCard.Primary>
+        </LayerCard>
+        <LayerCard>
+          <LayerCard.Secondary>实时速度</LayerCard.Secondary>
+          <LayerCard.Primary className="p-4"><Text size="sm">{status?.rate_per_min ? `${status.rate_per_min.toFixed(1)}/min` : "—"}</Text><Text size="xs" variant="secondary">当前任务</Text></LayerCard.Primary>
+        </LayerCard>
+        <LayerCard>
+          <LayerCard.Secondary>实时成功率</LayerCard.Secondary>
+          <LayerCard.Primary className="p-4"><Text size="sm">{liveDone + liveFailed ? `${liveSuccessRate.toFixed(1)}%` : "—"}</Text><Text size="xs" variant="secondary">成功 / 已结束账号</Text></LayerCard.Primary>
         </LayerCard>
         <LayerCard>
           <LayerCard.Secondary>本地号池</LayerCard.Secondary>
-          <LayerCard.Primary className="p-4"><Text size="sm">{poolTotal} 个{poolUnsynced ? ` · 未同步 ${poolUnsynced}` : ""}</Text></LayerCard.Primary>
+          <LayerCard.Primary className="p-4"><Text size="sm">{poolTotal} 个{poolUnsynced ? ` · 未上传 ${poolUnsynced}` : ""}</Text></LayerCard.Primary>
         </LayerCard>
         <LayerCard>
           <LayerCard.Secondary>自动策略</LayerCard.Secondary>
           <LayerCard.Primary className="p-4">
             <div className="flex flex-col gap-2">
               <Switch label="完成后自动入库" checked={autoImport} onCheckedChange={(value) => void savePoolFlags(!!value, autoSync)} />
-              <Switch label="入库后同步云端" checked={autoSync} onCheckedChange={(value) => void savePoolFlags(autoImport, !!value)} />
+              <Switch label="入库后加入上传队列" checked={autoSync} onCheckedChange={(value) => void savePoolFlags(autoImport, !!value)} />
             </div>
           </LayerCard.Primary>
         </LayerCard>

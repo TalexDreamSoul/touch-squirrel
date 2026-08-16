@@ -22,9 +22,26 @@ type UploadOptions struct {
 	RetryLimit  int    `json:"retryLimit"`
 	SkipCached  bool   `json:"skipCached"`
 	BaseURL     string `json:"baseUrl"`
+	Source      string `json:"source,omitempty"`
+	RunID       string `json:"runId,omitempty"`
 
-	Key string `json:"-"`
+	Key           string `json:"-"`
+	SkipCachedSet bool   `json:"-"`
 }
+
+// UploadFile is one in-memory credential supplied by pool and auto-upload callers.
+type UploadFile struct {
+	Name    string
+	Content []byte
+}
+
+type uploadStart struct {
+	job        *jobs.Job
+	onlyFailed bool
+}
+
+type UploadSuccessHook func(name string) error
+type UploadFailureHook func(name, message string)
 
 // uploadRequest carries prepare inputs from either multipart or JSON body.
 type uploadRequest struct {
@@ -87,6 +104,34 @@ func (s *Service) PrepareUpload(r *http.Request) (*jobs.Job, error) {
 		}
 	}
 
+	return s.prepareUploadCandidates(cands, srcErrs, req.Overrides, req.HasSkipCachedSet)
+}
+
+// PrepareUploadFiles creates a queued job from already-resolved credentials.
+func (s *Service) PrepareUploadFiles(files []UploadFile, opts UploadOptions) (*jobs.Job, error) {
+	cands := make([]candidate, 0, len(files))
+	errs := make([]string, 0)
+	for _, file := range files {
+		cand, err := parseCredential(file.Content, file.Name)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", file.Name, err))
+			continue
+		}
+		cands = append(cands, cand)
+	}
+	return s.prepareUploadCandidates(cands, errs, opts, opts.SkipCachedSet)
+}
+
+// PrepareUploadFolder creates a queued job from one server-local credential directory.
+func (s *Service) PrepareUploadFolder(folder string, opts UploadOptions) (*jobs.Job, error) {
+	cands, err := fromFolder(folder)
+	if err != nil {
+		return nil, err
+	}
+	return s.prepareUploadCandidates(cands, nil, opts, opts.SkipCachedSet)
+}
+
+func (s *Service) prepareUploadCandidates(cands []candidate, srcErrs []string, opts UploadOptions, hasSkipCachedSet bool) (*jobs.Job, error) {
 	cands = dedupeCandidates(cands)
 	if len(cands) == 0 {
 		if len(srcErrs) > 0 {
@@ -96,13 +141,15 @@ func (s *Service) PrepareUpload(r *http.Request) (*jobs.Job, error) {
 	}
 
 	_, _, defs := s.cfgFn()
-	opts := req.Overrides
 	opts.Concurrency = clampInt(opts.Concurrency, defs.UploadConcurrency, 1, 100)
 	opts.BatchSize = clampInt(opts.BatchSize, defs.UploadBatchSize, 1, 500)
 	opts.TimeoutMs = clampInt(opts.TimeoutMs, defs.TimeoutMs, 3000, 300000)
 	opts.RetryLimit = clampInt(opts.RetryLimit, defs.RetryLimit, 0, 10)
-	if !req.HasSkipCachedSet {
+	if !hasSkipCachedSet {
 		opts.SkipCached = true
+	}
+	if strings.TrimSpace(opts.Source) == "" {
+		opts.Source = "manual"
 	}
 	conn := s.ResolveConnection(opts.BaseURL, opts.Key)
 	opts.BaseURL = conn.BaseURL
@@ -110,30 +157,25 @@ func (s *Service) PrepareUpload(r *http.Request) (*jobs.Job, error) {
 
 	items := toItems(cands)
 	job := jobs.NewJob("upload", items)
-
-	// Cache pre-check: hits become skipped items.
 	if opts.SkipCached {
 		job.WithItems(func(items []*jobs.Item) {
-			for _, it := range items {
-				key := CacheKey(conn.BaseURL, it.Name, it.Content)
+			for _, item := range items {
+				key := CacheKey(conn.BaseURL, item.Name, item.Content)
 				if s.Cache.Has(key) {
-					it.Status = jobs.ItemSkipped
-					it.FromCache = true
-					it.Content = nil
-					it.Error = "本地缓存：此前已上传成功"
+					item.Status = jobs.ItemSkipped
+					item.FromCache = true
+					item.Content = nil
+					item.Error = "本地缓存：此前已上传成功"
 				}
 			}
 		})
 	}
-
-	// Store options on the job via a side registry.
 	s.uploadOpts.Store(job.ID, opts)
 	s.UploadJobs.Add(job)
-
 	if len(srcErrs) > 0 {
 		job.AddLog("部分来源解析失败: %s", strings.Join(srcErrs[:min(3, len(srcErrs))], "; "))
 	}
-	job.AddLog("任务已创建：共 %d 项", len(items))
+	job.AddLog("任务已创建：共 %d 项，来源 %s", len(items), opts.Source)
 	return job, nil
 }
 
@@ -146,25 +188,95 @@ func (s *Service) UploadJobOptions(jobID string) (UploadOptions, bool) {
 	return v.(UploadOptions), true
 }
 
-// StartUploadJob runs the job (or only failed items) in a goroutine.
-// Returns false if the job is already running or finished without failures.
+// SetUploadSuccessHook attaches source bookkeeping to one upload job.
+func (s *Service) SetUploadSuccessHook(jobID string, hook UploadSuccessHook) {
+	if hook == nil {
+		s.uploadHooks.Delete(jobID)
+		return
+	}
+	s.uploadHooks.Store(jobID, hook)
+}
+
+// SetUploadFailureHook attaches source-specific failure bookkeeping.
+func (s *Service) SetUploadFailureHook(jobID string, hook UploadFailureHook) {
+	if hook == nil {
+		s.uploadFailureHooks.Delete(jobID)
+		return
+	}
+	s.uploadFailureHooks.Store(jobID, hook)
+}
+
+// StartUploadJob appends one job to the process-wide serial upload queue.
 func (s *Service) StartUploadJob(job *jobs.Job, onlyFailed bool) bool {
-	st := job.GetStatus()
-	if st == jobs.StatusRunning {
+	s.uploadQueueMu.Lock()
+	if _, exists := s.uploadQueued[job.ID]; exists {
+		s.uploadQueueMu.Unlock()
 		return false
 	}
-	if st == jobs.StatusCompleted && !onlyFailed {
+	status := job.GetStatus()
+	if status == jobs.StatusRunning || status == jobs.StatusCancelled || (status == jobs.StatusCompleted && !onlyFailed) {
+		s.uploadQueueMu.Unlock()
 		return false
 	}
-	opts, ok := s.UploadJobOptions(job.ID)
-	if !ok {
-		return false
+	if onlyFailed {
+		hasFailed := false
+		for _, item := range job.ItemValues() {
+			if item.Status == jobs.ItemFailed {
+				hasFailed = true
+				break
+			}
+		}
+		if !hasFailed {
+			s.uploadQueueMu.Unlock()
+			return false
+		}
 	}
-	// Flip to running synchronously so callers observe the transition
-	// immediately (avoids start/status races).
-	job.SetStatus(jobs.StatusRunning)
-	go s.runUploadJob(job, opts, onlyFailed)
+	job.SetStatus(jobs.StatusQueued)
+	s.uploadQueued[job.ID] = struct{}{}
+	s.uploadQueue = append(s.uploadQueue, uploadStart{job: job, onlyFailed: onlyFailed})
+	s.uploadQueueCond.Signal()
+	s.uploadQueueMu.Unlock()
+	job.AddLog("已进入上传队列")
+	job.Broadcast(s.UploadSummary(job))
 	return true
+}
+
+func (s *Service) runUploadQueue() {
+	for {
+		s.uploadQueueMu.Lock()
+		for len(s.uploadQueue) == 0 {
+			s.uploadQueueCond.Wait()
+		}
+		next := s.uploadQueue[0]
+		s.uploadQueue = s.uploadQueue[1:]
+		delete(s.uploadQueued, next.job.ID)
+		s.uploadQueueMu.Unlock()
+
+		if next.job.GetStatus() == jobs.StatusCancelled {
+			continue
+		}
+		next.job.SetStatus(jobs.StatusRunning)
+		next.job.AddLog("队列调度：开始执行")
+		next.job.Broadcast(s.UploadSummary(next.job))
+		s.runUploadJob(next.job, mustUploadOptions(s, next.job.ID), next.onlyFailed)
+	}
+}
+
+func mustUploadOptions(s *Service, jobID string) UploadOptions {
+	opts, _ := s.UploadJobOptions(jobID)
+	return opts
+}
+
+// UploadQueuePosition returns a one-based pending position; running jobs return zero.
+func (s *Service) UploadQueuePosition(jobID string) int {
+	s.uploadQueueMu.Lock()
+	defer s.uploadQueueMu.Unlock()
+	for index, pending := range s.uploadQueue {
+		if pending.job.ID == jobID {
+			return index + 1
+		}
+	}
+	return 0
 }
 
 func (s *Service) runUploadJob(job *jobs.Job, opts UploadOptions, onlyFailed bool) {
@@ -254,6 +366,12 @@ func (s *Service) runUploadJob(job *jobs.Job, opts UploadOptions, onlyFailed boo
 
 				res := client.UploadOnce(it.Name, content)
 				if res.OK {
+					if value, exists := s.uploadHooks.Load(job.ID); exists {
+						if hookErr := value.(UploadSuccessHook)(it.Name); hookErr != nil {
+							lastErr = hookErr.Error()
+							continue
+						}
+					}
 					key := CacheKey(opts.BaseURL, it.Name, content)
 					var email, typ string
 					if it.Preview != nil {
@@ -283,6 +401,9 @@ func (s *Service) runUploadJob(job *jobs.Job, opts UploadOptions, onlyFailed boo
 					cur.FinishedAt = &now
 				})
 				job.AddLog("✗ %s: %s", it.Name, lastErr)
+				if value, exists := s.uploadFailureHooks.Load(job.ID); exists {
+					value.(UploadFailureHook)(it.Name, lastErr)
+				}
 			}
 			job.Broadcast(s.UploadSummary(job))
 		})
@@ -362,19 +483,20 @@ func uploadCounts(items []jobs.Item) itemCounts {
 
 // UploadSummary is the SSE/snapshot payload for an upload job.
 type UploadSummary struct {
-	ID         string        `json:"id"`
-	Kind       string        `json:"kind"`
-	Status     jobs.Status   `json:"status"`
-	CreatedAt  time.Time     `json:"createdAt"`
-	StartedAt  *time.Time    `json:"startedAt,omitempty"`
-	FinishedAt *time.Time    `json:"finishedAt,omitempty"`
-	Options    UploadOptions `json:"options"`
-	Total      int           `json:"total"`
-	Done       int           `json:"done"`
-	Progress   int           `json:"progress"`
-	Counts     itemCounts    `json:"counts"`
-	Logs       []string      `json:"logs"`
-	Items      []jobs.Item   `json:"items"`
+	ID            string        `json:"id"`
+	Kind          string        `json:"kind"`
+	Status        jobs.Status   `json:"status"`
+	CreatedAt     time.Time     `json:"createdAt"`
+	StartedAt     *time.Time    `json:"startedAt,omitempty"`
+	FinishedAt    *time.Time    `json:"finishedAt,omitempty"`
+	Options       UploadOptions `json:"options"`
+	QueuePosition int           `json:"queuePosition,omitempty"`
+	Total         int           `json:"total"`
+	Done          int           `json:"done"`
+	Progress      int           `json:"progress"`
+	Counts        itemCounts    `json:"counts"`
+	Logs          []string      `json:"logs"`
+	Items         []jobs.Item   `json:"items"`
 }
 
 // UploadSummary builds the public summary for a job.
@@ -396,7 +518,8 @@ func (s *Service) UploadSummary(job *jobs.Job) UploadSummary {
 	return UploadSummary{
 		ID: job.ID, Kind: "upload", Status: job.GetStatus(),
 		CreatedAt: job.CreatedAt, StartedAt: job.StartedAt, FinishedAt: job.FinishedAt,
-		Options: pub, Total: len(items), Done: done, Progress: progress,
+		Options: pub, QueuePosition: s.UploadQueuePosition(job.ID),
+		Total: len(items), Done: done, Progress: progress,
 		Counts: counts, Logs: logs, Items: items,
 	}
 }

@@ -197,7 +197,7 @@ func Defaults() Config {
 		NoProxy:                      "127.0.0.1,localhost",
 		ResinPlatform:                "Default",
 		CPAUploadEnabled:             false,
-		CPAManagementBase:            "http://localhost:8317/v0/management",
+		CPAManagementBase:            "http://localhost:8317",
 		CPAUploadTimeoutSec:          30,
 		CPAUploadRetries:             2,
 		CPAUploadNameTemplate:        "{email}.json",

@@ -214,8 +214,9 @@ func (e *Engine) run(ctx context.Context) (runErr error) {
 	}
 	log.Infof("Turnstile provider=%s (Playwright mint preferred, chromedp fallback)", e.turn.Name())
 	log.Infof("Turnstile mint: python=%s script=%s", turnstile.DetectedPython(), turnstile.DetectedScript())
+	deferCPAUpload := strings.TrimSpace(os.Getenv("SQUIRREL_DEFER_CPA_UPLOAD")) == "1"
 	e.uploader = cpa.NewUploader(cpa.UploadConfig{
-		Enabled:      cfg.CPAUploadEnabled,
+		Enabled:      cfg.CPAUploadEnabled && !deferCPAUpload,
 		BaseURL:      cfg.CPAManagementBase,
 		Key:          cfg.CPAManagementKey,
 		TimeoutSec:   cfg.CPAUploadTimeoutSec,
@@ -228,6 +229,9 @@ func (e *Engine) run(ctx context.Context) (runErr error) {
 	})
 	if e.uploader.Enabled() {
 		log.Infof("CPA upload enabled base=%s", cfg.CPAManagementBase)
+	}
+	if deferCPAUpload && cfg.CPAUploadEnabled {
+		log.Infof("CPA upload deferred to panel task queue")
 	}
 	e.oauth, err = oauth.NewClient(cfg.RegisterProxy, e.cm, time.Duration(cfg.OAuthRetrySec)*time.Second)
 	if err != nil {
