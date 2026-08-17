@@ -515,6 +515,83 @@ func (s *Store) Count() (int, error) {
 	return n, err
 }
 
+// DailyCounts buckets rows by the calendar day of timeField in loc, keyed
+// YYYY-MM-DD. since is an inclusive RFC3339 lower bound; empty means no bound.
+// A nil loc means UTC.
+//
+// Timestamps are stored as UTC, but each panel viewer reads the heatmap in
+// their own zone, so bucketing happens in Go after conversion rather than via
+// SQL substr — an 02:00 local event must not land on the previous column.
+func (s *Store) DailyCounts(timeField, since string, loc *time.Location) (map[string]int, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	switch timeField {
+	case "created_at", "updated_at", "last_used_at":
+	default:
+		return nil, fmt.Errorf("invalid time field %q", timeField)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	query := `SELECT ` + timeField + ` FROM accounts WHERE ` + timeField + ` != ''`
+	args := []any{}
+	if since = strings.TrimSpace(since); since != "" {
+		query += ` AND ` + timeField + ` >= ?`
+		args = append(args, since)
+	}
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var raw string
+		if rows.Scan(&raw) != nil {
+			continue
+		}
+		parsed, parseErr := time.Parse(time.RFC3339, raw)
+		if parseErr != nil {
+			continue
+		}
+		out[parsed.In(loc).Format("2006-01-02")]++
+	}
+	return out, rows.Err()
+}
+
+// StatusCounts returns row counts grouped by status, then by type.
+func (s *Store) StatusCounts() (byStatus map[string]int, byType map[string]int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	byStatus = map[string]int{}
+	byType = map[string]int{}
+	for _, group := range []struct {
+		column string
+		into   map[string]int
+	}{{"status", byStatus}, {"type", byType}} {
+		rows, queryErr := s.db.Query(`SELECT ` + group.column + `, COUNT(1) FROM accounts GROUP BY ` + group.column)
+		if queryErr != nil {
+			return nil, nil, queryErr
+		}
+		for rows.Next() {
+			var key string
+			var n int
+			if rows.Scan(&key, &n) == nil {
+				if key == "" {
+					key = "unknown"
+				}
+				group.into[key] += n
+			}
+		}
+		closeErr := rows.Err()
+		rows.Close()
+		if closeErr != nil {
+			return nil, nil, closeErr
+		}
+	}
+	return byStatus, byType, nil
+}
+
 type scannable interface {
 	Scan(dest ...any) error
 }

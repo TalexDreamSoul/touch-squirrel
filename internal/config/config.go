@@ -114,6 +114,12 @@ type Config struct {
 	ExportBatchSize   int
 	ExportConcurrency int
 
+	// DisplayTimezone is the IANA zone the panel falls back to when a client
+	// does not send one of its own. Empty means the server's local zone. It
+	// only affects how stored timestamps are bucketed for display; everything
+	// on disk stays UTC.
+	DisplayTimezone string
+
 	// Pool patrol (巡检) & quota estimate
 	PatrolEnabled     bool
 	PatrolIntervalMin int
@@ -326,6 +332,7 @@ func Save(path string, cfg Config) error {
 	b.WriteString(fmt.Sprintf("UPLOAD_BATCH_SIZE=%d\n", cfg.UploadBatchSize))
 	b.WriteString(fmt.Sprintf("EXPORT_BATCH_SIZE=%d\n", cfg.ExportBatchSize))
 	b.WriteString(fmt.Sprintf("EXPORT_CONCURRENCY=%d\n", cfg.ExportConcurrency))
+	b.WriteString(fmt.Sprintf("DISPLAY_TIMEZONE=%s\n", cfg.DisplayTimezone))
 	b.WriteString(fmt.Sprintf("PATROL_ENABLED=%s\n", bool01(cfg.PatrolEnabled)))
 	b.WriteString(fmt.Sprintf("PATROL_INTERVAL_MIN=%d\n", cfg.PatrolIntervalMin))
 	b.WriteString(fmt.Sprintf("PATROL_DEEP_PROBE=%s\n", bool01(cfg.PatrolDeepProbe)))
@@ -649,6 +656,9 @@ func applyMap(cfg *Config, env map[string]string) {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.ExportConcurrency = n
 		}
+	}
+	if v, ok := env["DISPLAY_TIMEZONE"]; ok {
+		cfg.DisplayTimezone = strings.TrimSpace(v)
 	}
 	if v, ok := env["PATROL_ENABLED"]; ok {
 		cfg.PatrolEnabled = truthy(v)

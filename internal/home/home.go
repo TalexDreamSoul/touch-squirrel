@@ -44,6 +44,7 @@ type Paths struct {
 	AccountsDB   string // unified account pool sqlite
 	NotifyFile   string // notification channels json
 	HunterFile   string // authorized asset discovery / disclosure workflow
+	Analytics    string // day-grained counter ledger for panel charts
 }
 
 // Resolve picks the data root with this precedence:
@@ -101,6 +102,7 @@ func Resolve() (Paths, error) {
 		AccountsDB:   filepath.Join(root, "accounts.db"),
 		NotifyFile:   filepath.Join(root, "notifications.json"),
 		HunterFile:   filepath.Join(root, "hunter.json"),
+		Analytics:    filepath.Join(root, "analytics.json"),
 	}
 	return p, nil
 }
