@@ -139,6 +139,26 @@ type Service struct {
 	lastRun   *time.Time
 	poolTotal int
 	events    []exitEvent
+	recorder  func(map[string]int64)
+}
+
+// SetRecorder installs a day-grained counter sink. Scan history here is capped
+// at historyCap and per-account verdicts are overwritten in place, so anything
+// the panel wants to chart over days has to be folded into the sink as it
+// happens.
+func (s *Service) SetRecorder(fn func(map[string]int64)) {
+	s.mu.Lock()
+	s.recorder = fn
+	s.mu.Unlock()
+}
+
+func (s *Service) record(metrics map[string]int64) {
+	s.mu.Lock()
+	fn := s.recorder
+	s.mu.Unlock()
+	if fn != nil {
+		fn(metrics)
+	}
 }
 
 // New builds the service and restores persisted state.
@@ -240,6 +260,18 @@ func (s *Service) Scan(ctx context.Context, opt ScanOptions) (*ScanRecord, error
 	}
 	s.saveLocked()
 	s.mu.Unlock()
+
+	metrics := map[string]int64{"degrade.scans": 1, "degrade.duration_ms": rec.DurationMS}
+	if err != nil {
+		metrics["degrade.scan_errors"] = 1
+	} else {
+		metrics["degrade.checked"] = int64(rec.Checked)
+		metrics["degrade.normal"] = int64(rec.Normal)
+		metrics["degrade.degraded"] = int64(rec.Degraded)
+		metrics["degrade.exhausted"] = int64(rec.Exhausted)
+		metrics["degrade.errored"] = int64(rec.Errored)
+	}
+	s.record(metrics)
 	return rec, nil
 }
 

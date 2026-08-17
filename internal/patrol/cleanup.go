@@ -288,13 +288,20 @@ func (s *Service) storeCleanup(res *CleanupResult, reason string) {
 		res.DurationMS = time.Since(res.Time).Milliseconds()
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	cp := *res
 	s.cleanup.last = &cp
 	now := time.Now()
 	s.cleanup.lastRun = &now
 	s.cleanup.lastReason = reason
 	s.saveLocked()
+	s.mu.Unlock()
+
+	s.record(map[string]int64{
+		"cleanup.runs":       1,
+		"cleanup.scanned":    int64(res.Scanned),
+		"cleanup.quota_hits": int64(res.QuotaHits),
+		"cleanup.deleted":    int64(res.Deleted),
+	})
 }
 
 // maybeCleanupAfterPatrol runs cleanup when enabled + on_patrol.

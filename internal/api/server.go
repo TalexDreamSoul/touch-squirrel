@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/grok-free-register/grok-reg/internal/acctpool"
+	"github.com/grok-free-register/grok-reg/internal/analytics"
 	"github.com/grok-free-register/grok-reg/internal/artifact"
 	"github.com/grok-free-register/grok-reg/internal/bridge"
 	"github.com/grok-free-register/grok-reg/internal/cluster"
@@ -77,6 +78,7 @@ type Server struct {
 	localPool      *localpool.Service
 	accounts       *acctpool.Store
 	hunter         *hunter.Service
+	analytics      *analytics.Store
 	plugins        *plugin.Manager
 	market         *plugin.Market
 	tavilyMu       sync.Mutex
@@ -89,6 +91,11 @@ type Server struct {
 
 func New(opt Options) *Server {
 	s := &Server{opt: opt, mux: http.NewServeMux()}
+	analyticsPath := opt.Paths.Analytics
+	if analyticsPath == "" && opt.Paths.Root != "" {
+		analyticsPath = filepath.Join(opt.Paths.Root, "analytics.json")
+	}
+	s.analytics = analytics.New(analyticsPath)
 	s.plugins = plugin.NewManager(opt.Paths.PluginsDir, opt.Paths.EnabledFile, plugin.ResolveInTreeRoot())
 	marketCache := opt.Paths.MarketCache
 	if marketCache == "" && opt.Paths.Root != "" {
@@ -120,6 +127,7 @@ func New(opt Options) *Server {
 			return err
 		})
 	s.patrol.SetPipelineChecker(s.pipelineRunning)
+	s.patrol.SetRecorder(s.analytics.Add)
 	degradeState := opt.Paths.DegradeState
 	if degradeState == "" && opt.Paths.Root != "" {
 		degradeState = filepath.Join(opt.Paths.Root, "degrade-state.json")
@@ -132,6 +140,7 @@ func New(opt Options) *Server {
 		func(cfg config.Config) degrade.ManagementAPI {
 			return cpa.NewClient(cfg.CPAManagementBase, cfg.CPAManagementKey, max(cfg.CPAUploadTimeoutSec, 30))
 		})
+	s.degrade.SetRecorder(s.analytics.Add)
 	s.cluster = cluster.New(opt.Paths.ClusterState, func() config.Config {
 		cfg, _ := config.Load(opt.Paths.Config)
 		return cfg
@@ -322,6 +331,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/logs", s.handleLogs)
 	s.mux.HandleFunc("GET /api/runs", s.handleRuns)
 	s.mux.HandleFunc("GET /api/register-metrics", s.handleRegisterMetrics)
+	s.mux.HandleFunc("GET /api/analytics/overview", s.handleAnalyticsOverview)
 	s.mux.HandleFunc("GET /api/runs/{id}/files", s.handleRunFiles)
 	s.mux.HandleFunc("GET /api/runs/{id}/log", s.handleRunLog)
 	s.mux.HandleFunc("GET /api/runs/{id}/metrics", s.handleRunMetrics)
@@ -1399,6 +1409,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"upload_batch_size":              cfg.UploadBatchSize,
 		"export_batch_size":              cfg.ExportBatchSize,
 		"export_concurrency":             cfg.ExportConcurrency,
+		"display_timezone":               cfg.DisplayTimezone,
 		"patrol_enabled":                 cfg.PatrolEnabled,
 		"patrol_interval_min":            cfg.PatrolIntervalMin,
 		"patrol_deep_probe":              cfg.PatrolDeepProbe,
@@ -1508,6 +1519,8 @@ type configUpdate struct {
 	ExportBatchSize   *int `json:"export_batch_size"`
 	ExportConcurrency *int `json:"export_concurrency"`
 
+	DisplayTimezone *string `json:"display_timezone"`
+
 	PatrolEnabled     *bool `json:"patrol_enabled"`
 	PatrolIntervalMin *int  `json:"patrol_interval_min"`
 	PatrolDeepProbe   *bool `json:"patrol_deep_probe"`
@@ -1560,6 +1573,16 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		if err := validateProxyURL("resin_proxy", *u.ResinProxy); err != nil {
 			writeJSON(w, 400, map[string]any{"ok": false, "error": err.Error()})
 			return
+		}
+	}
+	if u.DisplayTimezone != nil {
+		// Reject an unloadable zone here rather than storing a value that would
+		// silently fall back to the server's zone on every later request.
+		if name := strings.TrimSpace(*u.DisplayTimezone); name != "" {
+			if _, err := time.LoadLocation(name); err != nil {
+				writeJSON(w, 400, map[string]any{"ok": false, "error": fmt.Sprintf("未知时区 %q", name)})
+				return
+			}
 		}
 	}
 	for _, field := range []struct {
@@ -1832,6 +1855,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if u.ExportConcurrency != nil {
 		cfg.ExportConcurrency = *u.ExportConcurrency
+	}
+	if u.DisplayTimezone != nil {
+		cfg.DisplayTimezone = strings.TrimSpace(*u.DisplayTimezone)
 	}
 	if u.PatrolEnabled != nil {
 		cfg.PatrolEnabled = *u.PatrolEnabled

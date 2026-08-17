@@ -90,6 +90,25 @@ type Service struct {
 	eventLogPath    string
 	pipelineRunning PipelineRunningFunc
 	backupDir       string
+	recorder        func(map[string]int64)
+}
+
+// SetRecorder installs a day-grained counter sink. History here is capped at
+// historyCap records, so anything the panel wants to chart over days has to be
+// folded into the sink as it happens.
+func (s *Service) SetRecorder(fn func(map[string]int64)) {
+	s.mu.Lock()
+	s.recorder = fn
+	s.mu.Unlock()
+}
+
+func (s *Service) record(metrics map[string]int64) {
+	s.mu.Lock()
+	fn := s.recorder
+	s.mu.Unlock()
+	if fn != nil {
+		fn(metrics)
+	}
 }
 
 type refillState struct {
@@ -243,6 +262,18 @@ func (s *Service) Run(ctx context.Context, mode string) (*Record, error) {
 	}
 	s.saveLocked()
 	s.mu.Unlock()
+
+	metrics := map[string]int64{"patrol.runs": 1, "patrol.duration_ms": rec.DurationMS}
+	if err != nil {
+		metrics["patrol.errors"] = 1
+	} else {
+		metrics["patrol.checked"] = int64(rec.Total)
+		metrics["patrol.healthy"] = int64(rec.Healthy)
+		metrics["patrol.rate_limited"] = int64(rec.RateLimited)
+		metrics["patrol.dead"] = int64(rec.Dead)
+		metrics["patrol.disabled"] = int64(rec.Disabled)
+	}
+	s.record(metrics)
 
 	// Auto-refill evaluation happens after every successful patrol.
 	if err == nil {
