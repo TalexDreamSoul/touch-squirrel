@@ -72,7 +72,12 @@ panel-ui:
 		cd panel && npm install; \
 	fi
 	@echo "[*] next build (static export)"
-	@cd panel && npm run build
+	@# NODE_ENV must be production: a stray development value from the caller's
+	@# shell makes the static export fall back to the pages-router error document
+	@# and abort with "<Html> should not be imported outside of pages/_document".
+	@# NODE_PATH is cleared for the same reason — a foreign one resolves React
+	@# from another project's tree.
+	@cd panel && env -u NODE_PATH NODE_ENV=production npm run build
 	@rm -rf web/out
 	@mkdir -p web
 	@cp -R panel/out web/out
