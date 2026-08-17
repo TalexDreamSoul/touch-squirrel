@@ -449,7 +449,14 @@ export default function HunterPage() {
       {tab === "drafts" ? (
         <div className="flex flex-col gap-4">
           {composerFinding ? <LayerCard><LayerCard.Secondary>新建披露邮件</LayerCard.Secondary><LayerCard.Primary><div className="flex max-w-2xl flex-col gap-3">
-            <Select label="SMTP 渠道" value={draftForm.channel_id} onValueChange={(value) => value && setDraftForm((prev) => ({ ...prev, channel_id: value }))}>
+            {/* placeholder is required: channel_id is "" whenever no channel is
+                enabled, and kumo renders a blank trigger for an empty value. */}
+            <Select
+              label="SMTP 渠道"
+              placeholder={(data?.smtp_channels || []).length > 0 ? "请选择 SMTP 渠道" : "请先在「系统 → 通知」配置 SMTP 渠道"}
+              value={draftForm.channel_id}
+              onValueChange={(value) => value && setDraftForm((prev) => ({ ...prev, channel_id: value }))}
+            >
               {(data?.smtp_channels || []).map((channel) => <Select.Option key={channel.id} value={channel.id}>{channel.name}{channel.enabled ? "" : "（已停用）"}</Select.Option>)}
             </Select>
             <Input label="收件人" type="email" value={draftForm.to} onChange={(e) => setDraftForm((prev) => ({ ...prev, to: e.target.value }))} />
