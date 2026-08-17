@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowsClockwiseIcon,
   PlayIcon,
@@ -18,7 +18,9 @@ import {
 } from "@cloudflare/kumo";
 import { AdminShell } from "@/components/admin-shell";
 import { PageHeader } from "@/components/page-header";
+import { DonutChart, TrendChart } from "@/components/charts";
 import { api } from "@/lib/api";
+import { formatDateTime, useTimezone } from "@/lib/timezone";
 
 type Verdict = "normal" | "degraded" | "exhausted" | "error";
 
@@ -118,13 +120,6 @@ function verdictLabel(verdict: string) {
   }
 }
 
-function formatDate(value?: string) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false });
-}
-
 function formatDuration(milliseconds?: number) {
   if (!milliseconds || milliseconds < 1) return "—";
   if (milliseconds < 1000) return `${milliseconds} ms`;
@@ -134,6 +129,7 @@ function formatDuration(milliseconds?: number) {
 }
 
 export default function DegradePage() {
+  const { timezone } = useTimezone();
   const [data, setData] = useState<OverviewResponse | null>(null);
   const [records, setRecords] = useState<DegradeRecord[]>([]);
   const [total, setTotal] = useState(0);
@@ -226,11 +222,48 @@ export default function DegradePage() {
     }
   }
 
+  const formatWhen = (value?: string) => (value ? formatDateTime(value, timezone) : "—");
+
   const overview = data?.overview;
   const status = data?.status;
   const settings = data?.settings;
-  const history = data?.history || [];
+  const history = useMemo(() => data?.history || [], [data?.history]);
   const exits = data?.exits || [];
+
+  const verdictItems = useMemo(() => {
+    if (!overview) return [];
+    const items = [
+      { name: "正常", value: overview.normal, tone: "success" as const },
+      { name: "疑似降智", value: overview.degraded, tone: "critical" as const },
+      { name: "额度耗尽", value: overview.exhausted, tone: "warning" as const },
+      { name: "检测错误", value: overview.errored, tone: "neutral" as const },
+      { name: "未检测", value: overview.unchecked, tone: "neutral" as const },
+    ];
+    return items.some((item) => item.value > 0) ? items : [];
+  }, [overview]);
+
+  // History arrives newest-first; charts read left-to-right in time order.
+  const scanSeries = useMemo(() => {
+    const ordered = [...history].reverse();
+    if (ordered.length === 0) return [];
+    const at = (record: ScanRecord) => new Date(record.time).getTime();
+    return [
+      {
+        name: "已检测",
+        points: ordered.map((r) => [at(r), r.checked] as [number, number]),
+      },
+      {
+        name: "疑似降智",
+        points: ordered.map((r) => [at(r), r.degraded] as [number, number]),
+        tone: "critical" as const,
+      },
+      {
+        name: "额度耗尽",
+        points: ordered.map((r) => [at(r), r.exhausted] as [number, number]),
+        tone: "warning" as const,
+      },
+    ];
+  }, [history]);
 
   return (
     <AdminShell>
@@ -297,25 +330,54 @@ export default function DegradePage() {
         </LayerCard.Primary>
       </LayerCard>
 
+      <div className="mb-4 grid items-start gap-4 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+        <LayerCard>
+          <LayerCard.Secondary>结论分布</LayerCard.Secondary>
+          <LayerCard.Primary className="p-4">
+            {verdictItems.length > 0 ? (
+              <DonutChart items={verdictItems} height={220} />
+            ) : (
+              <Text variant="secondary">尚未产生检测结论</Text>
+            )}
+          </LayerCard.Primary>
+        </LayerCard>
+
+        <LayerCard>
+          <LayerCard.Secondary>检测概览</LayerCard.Secondary>
+          <LayerCard.Primary>
+            <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                ["号池总数", overview?.pool_total || 0],
+                ["已检测", overview?.checked || 0],
+                ["正常", overview?.normal || 0],
+                ["疑似降智", overview?.degraded || 0],
+                ["额度耗尽", overview?.exhausted || 0],
+                ["检测错误", overview?.errored || 0],
+                ["已隔离", overview?.isolated || 0],
+                ["未检测", overview?.unchecked || 0],
+              ].map(([label, value]) => (
+                <div key={label} className="border-b border-kumo-hairline pb-2">
+                  <Text size="xs" variant="secondary">{label}</Text>
+                  <Text>{value}</Text>
+                </div>
+              ))}
+            </div>
+          </LayerCard.Primary>
+        </LayerCard>
+      </div>
+
       <LayerCard className="mb-4">
-        <LayerCard.Secondary>检测概览</LayerCard.Secondary>
-        <LayerCard.Primary>
-          <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              ["号池总数", overview?.pool_total || 0],
-              ["已检测", overview?.checked || 0],
-              ["正常", overview?.normal || 0],
-              ["疑似降智", overview?.degraded || 0],
-              ["额度耗尽", overview?.exhausted || 0],
-              ["检测错误", overview?.errored || 0],
-              ["已隔离", overview?.isolated || 0],
-              ["未检测", overview?.unchecked || 0],
-            ].map(([label, value]) => (
-              <div key={label} className="border-b border-kumo-hairline pb-2">
-                <Text size="xs" variant="secondary">{label}</Text>
-                <Text>{value}</Text>
-              </div>
-            ))}
+        <LayerCard.Secondary>扫描趋势 · 最近 {history.length} 次</LayerCard.Secondary>
+        <LayerCard.Primary className="p-4">
+          {scanSeries.length > 0 ? (
+            <TrendChart series={scanSeries} height={260} valueFormat={(value) => `${value} 个账号`} />
+          ) : (
+            <Text variant="secondary">尚未执行抽样扫描，趋势图会在第一次扫描后出现</Text>
+          )}
+          <div className="mt-3">
+            <Text size="xs" variant="secondary">
+              仅保留最近 50 次扫描的原始记录；按天聚合的长期趋势见「数据分析」页。
+            </Text>
           </div>
         </LayerCard.Primary>
       </LayerCard>
@@ -388,9 +450,9 @@ export default function DegradePage() {
                       </Table.Cell>
                       <Table.Cell><Text size="xs">{record.exit || "direct"}</Text></Table.Cell>
                       <Table.Cell>
-                        <Text size="xs">{formatDate(record.checked_at)}</Text>
+                        <Text size="xs">{formatWhen(record.checked_at)}</Text>
                         {record.first_degraded_at ? (
-                          <Text size="xs" variant="secondary">首次异常 {formatDate(record.first_degraded_at)}</Text>
+                          <Text size="xs" variant="secondary">首次异常 {formatWhen(record.first_degraded_at)}</Text>
                         ) : null}
                       </Table.Cell>
                       <Table.Cell>
@@ -430,7 +492,7 @@ export default function DegradePage() {
                       </Badge>
                     </div>
                     <Text size="xs" variant="secondary">
-                      {exit.window_min} 分钟内 {exit.requests} 次请求 · {exit.degraded} 个降智 · 最近 {formatDate(exit.last_at)}
+                      {exit.window_min} 分钟内 {exit.requests} 次请求 · {exit.degraded} 个降智 · 最近 {formatWhen(exit.last_at)}
                     </Text>
                   </div>
                 ))}
@@ -449,7 +511,7 @@ export default function DegradePage() {
                 {history.slice(0, 8).map((item) => (
                   <div key={`${item.time}-${item.duration_ms}`} className="border-b border-kumo-hairline pb-3 last:border-0 last:pb-0">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <Text size="sm">{formatDate(item.time)}</Text>
+                      <Text size="sm">{formatWhen(item.time)}</Text>
                       <Text size="xs" variant="secondary">{formatDuration(item.duration_ms)}</Text>
                     </div>
                     <Text size="xs" variant="secondary">

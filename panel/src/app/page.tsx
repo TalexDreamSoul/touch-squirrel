@@ -1,10 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, Button, LayerCard, Text } from "@cloudflare/kumo";
+import { Badge, Button, LayerCard, Meter, Text } from "@cloudflare/kumo";
 import { AdminShell } from "@/components/admin-shell";
 import { PageHeader } from "@/components/page-header";
+import { ContributionCalendar, DonutChart, StatTile } from "@/components/charts";
 import { api, type ClusterStatus, type RunStatus } from "@/lib/api";
+import {
+  CALENDAR_DETAIL_LABELS,
+  fetchAnalytics,
+  formatCount,
+  formatDuration,
+  formatPercent,
+  type AnalyticsOverview,
+} from "@/lib/analytics";
+import { useTimezone } from "@/lib/timezone";
 
 type OverviewResp = {
   ok: boolean;
@@ -46,16 +56,11 @@ type MetricsSummary = {
 
 type LocalInventory = { total?: number; synced?: number; unsynced?: number };
 
-function percent(value?: number) {
-  return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
-}
-
-function duration(ms?: number) {
-  if (!ms) return "—";
-  if (ms < 1000) return `${ms} ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
-  return `${(ms / 60_000).toFixed(1)} min`;
-}
+/** The live feed refreshes fast; the analytics feed walks run dirs, so it does not. */
+const LIVE_INTERVAL_MS = 5_000;
+const ANALYTICS_INTERVAL_MS = 60_000;
+/** A full year, so the calendar fills its card instead of hugging the left edge. */
+const ANALYTICS_DAYS = 365;
 
 export default function OverviewPage() {
   const [status, setStatus] = useState<RunStatus | null>(null);
@@ -64,7 +69,9 @@ export default function OverviewPage() {
   const [health, setHealth] = useState<HealthResp | null>(null);
   const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
   const [localInventory, setLocalInventory] = useState<LocalInventory | null>(null);
+  const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
   const [error, setError] = useState("");
+  const { timezone } = useTimezone();
 
   const load = useCallback(async () => {
     try {
@@ -88,23 +95,42 @@ export default function OverviewPage() {
     }
   }, []);
 
+  const loadAnalytics = useCallback(async () => {
+    try {
+      setAnalytics(await fetchAnalytics(ANALYTICS_DAYS, timezone));
+    } catch {
+      // Charts are supplementary; a failure here must not blank the live panel.
+    }
+  }, [timezone]);
+
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load(), 5000);
+    const timer = window.setInterval(() => void load(), LIVE_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [load]);
+
+  useEffect(() => {
+    void loadAnalytics();
+    const timer = window.setInterval(() => void loadAnalytics(), ANALYTICS_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [loadAnalytics]);
 
   const poolOverview = pool?.overview;
   const liveDone = status?.done ?? status?.success ?? 0;
   const liveTarget = status?.target ?? 0;
   const liveProgress = liveTarget > 0 ? Math.min(100, Math.round((liveDone / liveTarget) * 100)) : 0;
   const serviceHealthy = health?.ok === true;
-  const poolRows = useMemo(
+
+  const registerCalendar = analytics?.calendars.find((c) => c.key === "register");
+  const accountsCalendar = analytics?.calendars.find((c) => c.key === "accounts");
+  const poolHealthDist = analytics?.distributions.find((d) => d.key === "pool_health");
+
+  const poolItems = useMemo(
     () => [
-      { label: "健康", value: poolOverview?.healthy || 0 },
-      { label: "临时限流", value: poolOverview?.rate_limited || 0 },
-      { label: "不可用", value: poolOverview?.dead || 0 },
-      { label: "已停用", value: poolOverview?.disabled || 0 },
+      { name: "健康", value: poolOverview?.healthy || 0, tone: "success" as const },
+      { name: "临时限流", value: poolOverview?.rate_limited || 0, tone: "warning" as const },
+      { name: "不可用", value: poolOverview?.dead || 0, tone: "critical" as const },
+      { name: "已停用", value: poolOverview?.disabled || 0, tone: "neutral" as const },
     ],
     [poolOverview],
   );
@@ -114,37 +140,70 @@ export default function OverviewPage() {
       <PageHeader
         title="概览"
         description="注册成效、号池质量、任务队列与服务状态"
-        actions={<Button variant="secondary" size="sm" onClick={() => void load()}>刷新</Button>}
+        actions={
+          <Button variant="secondary" size="sm" onClick={() => { void load(); void loadAnalytics(); }}>
+            刷新
+          </Button>
+        }
       />
 
       {error ? <div className="mb-3"><Text variant="error">{error}</Text></div> : null}
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-        <Metric label="服务" value={serviceHealthy ? "正常" : "异常"} hint={health?.service || "touch-squirrel-panel"} primary={serviceHealthy} />
-        <Metric label="当前注册" value={status?.status || "stopped"} hint={status?.phase_detail || status?.phase || "无活动任务"} primary={status?.status === "running"} />
-        <Metric label="24h 成功率" value={percent(metrics?.success_rate)} hint={`${metrics?.account_count || 0} 个账号样本`} primary={(metrics?.success_rate || 0) >= 0.8} />
-        <Metric label="24h 吞吐" value={metrics?.throughput_per_hour ? `${metrics.throughput_per_hour.toFixed(1)}/h` : "—"} hint={`${metrics?.run_count || 0} 个任务`} />
-        <Metric label="本地凭证" value={String(localInventory?.total ?? 0)} hint={`已上传 ${localInventory?.synced ?? 0} · 未上传 ${localInventory?.unsynced ?? 0}`} primary={(localInventory?.total || 0) > 0} />
-        <Metric label="上传队列" value={String(health?.jobs?.upload?.running || 0)} hint={`运行中 · 累计 ${health?.jobs?.upload?.total || 0}`} primary={(health?.jobs?.upload?.running || 0) > 0} />
+        <StatTile
+          label="服务"
+          value={serviceHealthy ? "正常" : "异常"}
+          hint={health?.build?.version || health?.service || "touch-squirrel-panel"}
+          tone={serviceHealthy ? "success" : "critical"}
+        />
+        <StatTile
+          label="当前注册"
+          value={status?.status || "stopped"}
+          hint={status?.phase_detail || status?.phase || "无活动任务"}
+          tone={status?.status === "running" ? "success" : "neutral"}
+        />
+        <StatTile
+          label="24 小时成功率"
+          value={formatPercent(metrics?.success_rate)}
+          hint={`${formatCount(metrics?.account_count)} 个账号样本`}
+          tone={(metrics?.success_rate || 0) >= 0.8 ? "success" : "warning"}
+        />
+        <StatTile
+          label="24 小时吞吐"
+          value={metrics?.throughput_per_hour ? `${metrics.throughput_per_hour.toFixed(1)}/小时` : "—"}
+          hint={`${formatCount(metrics?.run_count)} 个任务`}
+        />
+        <StatTile
+          label="本地凭证"
+          value={formatCount(localInventory?.total ?? 0)}
+          hint={`已上传 ${formatCount(localInventory?.synced ?? 0)} · 未上传 ${formatCount(localInventory?.unsynced ?? 0)}`}
+          sparkline={accountsCalendar?.days.map((d) => d.value)}
+        />
+        <StatTile
+          label="上传队列"
+          value={formatCount(health?.jobs?.upload?.running || 0)}
+          hint={`运行中 · 累计 ${formatCount(health?.jobs?.upload?.total || 0)}`}
+          tone={(health?.jobs?.upload?.running || 0) > 0 ? "success" : "neutral"}
+        />
       </div>
 
-      <div className="mb-4 grid gap-4 xl:grid-cols-3">
+      <div className="mb-4 grid items-start gap-4 xl:grid-cols-3">
         <LayerCard>
           <LayerCard.Secondary>实时注册流水线</LayerCard.Secondary>
           <LayerCard.Primary className="p-4">
             <div className="flex flex-col gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
+                <div className="min-w-0">
                   <Text size="sm">run {status?.run_id || "—"}</Text>
                   <Text size="xs" variant="secondary">{status?.phase_detail || status?.phase || "无活动任务"}</Text>
                 </div>
                 <Badge variant={status?.status === "running" ? "primary" : "secondary"}>{status?.status || "stopped"}</Badge>
               </div>
-              <progress className="w-full" max={100} value={liveProgress} aria-label="当前注册进度" />
+              <Meter value={liveProgress} max={100} label="当前进度" showValue />
               <div className="grid grid-cols-3 gap-3">
                 <Mini label="进度" value={`${liveDone}/${liveTarget || 0}`} />
                 <Mini label="失败" value={String(status?.fail_count ?? status?.fail ?? 0)} />
-                <Mini label="速度" value={status?.rate_per_min ? `${status.rate_per_min.toFixed(1)}/min` : "—"} />
+                <Mini label="速度" value={status?.rate_per_min ? `${status.rate_per_min.toFixed(1)}/分` : "—"} />
               </div>
               <Text size="xs" variant="secondary">
                 workers S {status?.workers?.s || 0} · P {status?.workers?.p || 0} · C {status?.workers?.c || 0} · OAuth {status?.workers?.oauth || 0}
@@ -157,12 +216,12 @@ export default function OverviewPage() {
           <LayerCard.Secondary>24 小时注册质量</LayerCard.Secondary>
           <LayerCard.Primary className="p-4">
             <div className="grid grid-cols-2 gap-4">
-              <Mini label="成功率" value={percent(metrics?.success_rate)} />
-              <Mini label="失败率" value={percent(metrics?.failure_rate)} />
-              <Mini label="平均账号耗时" value={duration(metrics?.average_account_ms)} />
-              <Mini label="P95 账号耗时" value={duration(metrics?.p95_account_ms)} />
-              <Mini label="P50 账号耗时" value={duration(metrics?.p50_account_ms)} />
-              <Mini label="账号样本" value={String(metrics?.account_count || 0)} />
+              <Mini label="成功率" value={formatPercent(metrics?.success_rate)} />
+              <Mini label="失败率" value={formatPercent(metrics?.failure_rate)} />
+              <Mini label="平均账号耗时" value={formatDuration(metrics?.average_account_ms)} />
+              <Mini label="P95 账号耗时" value={formatDuration(metrics?.p95_account_ms)} />
+              <Mini label="P50 账号耗时" value={formatDuration(metrics?.p50_account_ms)} />
+              <Mini label="账号样本" value={formatCount(metrics?.account_count || 0)} />
             </div>
           </LayerCard.Primary>
         </LayerCard>
@@ -171,11 +230,9 @@ export default function OverviewPage() {
           <LayerCard.Secondary>号池巡检分布</LayerCard.Secondary>
           <LayerCard.Primary className="p-4">
             {poolOverview?.total ? (
-              <div className="flex flex-col gap-3">
-                {poolRows.map((row) => (
-                  <Distribution key={row.label} label={row.label} value={row.value} total={poolOverview.total} />
-                ))}
-              </div>
+              <DonutChart items={poolItems} height={220} />
+            ) : poolHealthDist && poolHealthDist.total > 0 ? (
+              <DonutChart items={poolHealthDist.items} height={220} />
             ) : (
               <Text variant="secondary">尚未执行号池巡检；本地凭证总量见顶部指标</Text>
             )}
@@ -183,7 +240,32 @@ export default function OverviewPage() {
         </LayerCard>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <LayerCard className="mb-4">
+        <LayerCard.Secondary>
+          <div className="flex w-full flex-wrap items-center justify-between gap-2">
+            <span>近一年注册产出</span>
+            {registerCalendar ? (
+              <Text size="xs" variant="secondary">
+                共 {formatCount(registerCalendar.total)} 个账号 · 活跃 {registerCalendar.active_days} 天 · 单日峰值 {formatCount(registerCalendar.max)}
+              </Text>
+            ) : null}
+          </div>
+        </LayerCard.Secondary>
+        <LayerCard.Primary className="p-4">
+          {registerCalendar ? (
+            <ContributionCalendar
+              days={registerCalendar.days}
+              label={registerCalendar.label}
+              unit={registerCalendar.unit}
+              detailLabels={CALENDAR_DETAIL_LABELS.register}
+            />
+          ) : (
+            <Text variant="secondary">正在加载注册活动…</Text>
+          )}
+        </LayerCard.Primary>
+      </LayerCard>
+
+      <div className="grid items-start gap-4 lg:grid-cols-2">
         <LayerCard>
           <LayerCard.Secondary>服务与后台任务</LayerCard.Secondary>
           <LayerCard.Primary className="p-4">
@@ -221,33 +303,8 @@ export default function OverviewPage() {
   );
 }
 
-function Metric({ label, value, hint, primary = false }: { label: string; value: string; hint: string; primary?: boolean }) {
-  return (
-    <LayerCard>
-      <LayerCard.Secondary>{label}</LayerCard.Secondary>
-      <LayerCard.Primary className="p-4">
-        <div className="flex items-center justify-between gap-2">
-          <Text variant="heading3" as="h3">{value}</Text>
-          {primary ? <Badge variant="primary">实时</Badge> : null}
-        </div>
-        <Text size="xs" variant="secondary">{hint}</Text>
-      </LayerCard.Primary>
-    </LayerCard>
-  );
-}
-
 function Mini({ label, value }: { label: string; value: string }) {
   return <div><Text size="xs" variant="secondary">{label}</Text><Text size="sm">{value}</Text></div>;
-}
-
-function Distribution({ label, value, total }: { label: string; value: number; total: number }) {
-  const ratio = total > 0 ? Math.round((value / total) * 100) : 0;
-  return (
-    <div>
-      <div className="mb-1 flex justify-between gap-3"><Text size="xs">{label}</Text><Text size="xs" variant="secondary">{value} · {ratio}%</Text></div>
-      <progress className="w-full" max={100} value={ratio} aria-label={`${label}占比`} />
-    </div>
-  );
 }
 
 function ServiceLine({ label, state, detail, good }: { label: string; state: string; detail: string; good: boolean }) {

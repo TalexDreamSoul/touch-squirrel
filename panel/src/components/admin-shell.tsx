@@ -7,6 +7,7 @@ import {
   BookOpenIcon,
   BinocularsIcon,
   BroadcastIcon,
+  ChartLineUpIcon,
   CloudArrowUpIcon,
   DownloadSimpleIcon,
   GearIcon,
@@ -16,6 +17,7 @@ import {
   PlugsIcon,
   PulseIcon,
   SignOutIcon,
+  SlidersIcon,
   StackIcon,
 } from "@phosphor-icons/react";
 import {
@@ -43,52 +45,43 @@ type NavGroup = {
 
 const navGroups: NavGroup[] = [
   {
-    label: "工作台",
+    label: "总览",
     items: [
       { href: "/", label: "概览", icon: HouseIcon },
-      { href: "/register", label: "注册", icon: PlayCircleIcon },
+      { href: "/analytics", label: "数据分析", icon: ChartLineUpIcon },
     ],
   },
   {
-    label: "Host",
-    items: [{ href: "/plugins", label: "插件", icon: PlugsIcon }],
-  },
-  {
-    label: "凭证",
+    label: "运行",
     items: [
+      { href: "/register", label: "注册", icon: PlayCircleIcon },
+      { href: "/pool", target: "/pool/?tab=list", label: "凭证池", icon: StackIcon },
       { href: "/upload", label: "上传", icon: CloudArrowUpIcon },
       { href: "/export", label: "导出", icon: DownloadSimpleIcon },
-      { href: "/pool", target: "/pool/?tab=list", label: "凭证池", icon: StackIcon },
     ],
   },
   {
-    label: "风控",
-    items: [{ href: "/degrade", label: "降智分析", icon: PulseIcon }],
-  },
-  {
-    label: "联邦",
-    items: [{ href: "/cluster", label: "主从", icon: NetworkIcon }],
-  },
-  {
-    label: "状态页",
+    label: "质量与风控",
     items: [
-      { href: "/status", label: "公开看板", icon: BroadcastIcon },
-      { href: "/status-admin", label: "看板设置", icon: GearIcon },
+      { href: "/degrade", label: "降智分析", icon: PulseIcon },
+      { href: "/hunter", label: "泄露巡检", icon: BinocularsIcon },
     ],
   },
   {
-    label: "安全",
-    items: [{ href: "/hunter", label: "泄露巡检", icon: BinocularsIcon }],
-  },
-  {
-    label: "文档",
-    items: [{ href: "/docs", label: "技术说明", icon: BookOpenIcon }],
+    label: "联邦与看板",
+    items: [
+      { href: "/cluster", label: "主从", icon: NetworkIcon },
+      { href: "/status", label: "公开看板", icon: BroadcastIcon },
+      { href: "/status-admin", label: "看板设置", icon: SlidersIcon },
+    ],
   },
   {
     label: "系统",
     items: [
+      { href: "/plugins", label: "插件", icon: PlugsIcon },
       { href: "/notifications", label: "通知", icon: BellIcon },
       { href: "/settings", label: "设置", icon: GearIcon },
+      { href: "/docs", label: "技术说明", icon: BookOpenIcon },
     ],
   },
 ];

@@ -25,7 +25,9 @@ import {
 import { AdminShell } from "@/components/admin-shell";
 import { ArtifactWarehouse } from "@/components/artifact-warehouse";
 import { PageHeader } from "@/components/page-header";
+import { TrendChart } from "@/components/charts";
 import { api, getToken, type ClusterStatus } from "@/lib/api";
+import { formatDate, formatTime, useTimezone } from "@/lib/timezone";
 
 type LocalPoolItem = {
   name: string;
@@ -45,6 +47,7 @@ type AccountItem = {
   status: string;
   email?: string;
   external_id?: string;
+  meta?: Record<string, string>;
   source?: string;
   run_id?: string;
   created_at?: string;
@@ -64,6 +67,19 @@ type CloudPoolItem = {
   size?: number;
   success?: number;
   failed?: number;
+};
+
+/** One patrol sweep from `/api/pool/patrol/history` (newest first, last 50 only). */
+type PatrolRecord = {
+  time: string;
+  mode: string;
+  healthy: number;
+  rate_limited: number;
+  dead: number;
+  disabled: number;
+  total: number;
+  duration_ms: number;
+  error?: string;
 };
 
 type Overview = {
@@ -100,6 +116,8 @@ type CredentialRow = {
   channel?: string;
   status: string;
   statusDetail?: string;
+  syncStatus?: "synced" | "unsynced" | "failed";
+  syncDetail?: string;
   time?: string;
   stats?: string;
   artifactQuery?: string;
@@ -249,13 +267,14 @@ function credentialStatusLabel(status: string) {
   }
 }
 
-function formatDate(value?: string) {
+/** 表格里日期与时间分两行显示，所以拆成 { date, time } 而不是直接用 formatDateTime。 */
+function formatDateParts(value: string | undefined, timezone: string) {
   if (!value) return { date: "—", time: "" };
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return { date: value, time: "" };
   return {
-    date: parsed.toLocaleDateString("zh-CN"),
-    time: parsed.toLocaleTimeString("zh-CN", { hour12: false }),
+    date: formatDate(parsed, timezone),
+    time: formatTime(parsed, timezone),
   };
 }
 
@@ -323,6 +342,7 @@ export default function PoolPage() {
 }
 
 function PoolContent() {
+  const { timezone } = useTimezone();
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedTab = searchParams.get("tab");
@@ -364,6 +384,7 @@ function PoolContent() {
 
   const [ov, setOv] = useState<Overview | null>(null);
   const [patrolLogs, setPatrolLogs] = useState("");
+  const [patrolHistory, setPatrolHistory] = useState<PatrolRecord[]>([]);
 
   const refreshMasters = useCallback(async () => {
     try {
@@ -544,12 +565,14 @@ function PoolContent() {
   );
 
   const loadPatrol = useCallback(async () => {
-    const [o, l] = await Promise.all([
+    const [o, l, h] = await Promise.all([
       api<Overview>("/api/pool/overview"),
       api<{ text?: string; lines?: string[] }>("/api/pool/logs?tail=200"),
+      api<{ history?: PatrolRecord[] }>("/api/pool/patrol/history").catch(() => ({ history: [] })),
     ]);
     setOv(o);
     setPatrolLogs(l.text || (l.lines || []).join("\n"));
+    setPatrolHistory(h.history || []);
   }, []);
 
   useEffect(() => {
@@ -720,6 +743,8 @@ function PoolContent() {
         plugin: item.plugin,
         channel: item.run_id ? `run ${item.run_id}` : undefined,
         status: item.status,
+        syncStatus: item.meta?.sync_error ? "failed" : item.meta?.synced_at ? "synced" : item.source === "local-pool" ? "unsynced" : undefined,
+        syncDetail: item.meta?.sync_error,
         time:
           timeField === "created_at"
             ? item.created_at
@@ -740,6 +765,8 @@ function PoolContent() {
         channel: item.source_run ? `run ${item.source_run}` : undefined,
         status: item.synced_at ? "synced" : "unsynced",
         statusDetail: item.sync_error,
+        syncStatus: item.sync_error ? "failed" : item.synced_at ? "synced" : "unsynced",
+        syncDetail: item.sync_error,
         time: item.synced_at || item.added_at,
         stats: item.size ? `${item.size.toLocaleString("zh-CN")} B` : undefined,
         artifactQuery: item.name,
@@ -922,6 +949,18 @@ function PoolContent() {
   const o = ov?.overview;
   const c = ov?.cleanup;
   const controlsBusy = listBusy || batchBusy !== "";
+
+  // History arrives newest-first; charts read left-to-right in time order.
+  const patrolSeries = useMemo(() => {
+    const ordered = [...patrolHistory].reverse();
+    if (ordered.length === 0) return [];
+    const at = (record: PatrolRecord) => new Date(record.time).getTime();
+    return [
+      { name: "健康", points: ordered.map((r) => [at(r), r.healthy] as [number, number]), tone: "success" as const },
+      { name: "限流", points: ordered.map((r) => [at(r), r.rate_limited] as [number, number]), tone: "warning" as const },
+      { name: "不可用", points: ordered.map((r) => [at(r), r.dead] as [number, number]), tone: "critical" as const },
+    ];
+  }, [patrolHistory]);
 
   return (
     <AdminShell>
@@ -1374,6 +1413,7 @@ function PoolContent() {
                       <Table.Head>来源</Table.Head>
                       <Table.Head>插件 / 渠道</Table.Head>
                       <Table.Head>状态</Table.Head>
+                      <Table.Head>同步</Table.Head>
                       <Table.Head>
                         {poolSource === "accounts"
                           ? timeField === "created_at"
@@ -1388,7 +1428,7 @@ function PoolContent() {
                   </Table.Header>
                   <Table.Body>
                     {credentialRows.map((row, index) => {
-                      const time = formatDate(row.time);
+                      const time = formatDateParts(row.time, timezone);
                       const healthy = row.status === "active" || row.status === "synced";
                       return (
                         <Table.Row key={row.key}>
@@ -1452,6 +1492,22 @@ function PoolContent() {
                                 </Text>
                               ) : null}
                             </div>
+                          </Table.Cell>
+                          <Table.Cell>
+                            {row.syncStatus ? (
+                              <div className="max-w-44">
+                                <Badge variant={row.syncStatus === "synced" ? "primary" : "secondary"}>
+                                  {row.syncStatus === "synced" ? "已同步" : row.syncStatus === "failed" ? "同步失败" : "未同步"}
+                                </Badge>
+                                {row.syncDetail ? (
+                                  <Text size="xs" variant="secondary">
+                                    {row.syncDetail}
+                                  </Text>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <Text size="xs" variant="secondary">—</Text>
+                            )}
                           </Table.Cell>
                           <Table.Cell>
                             <Text size="xs">{row.stats || time.date}</Text>
@@ -1533,6 +1589,22 @@ function PoolContent() {
             <Stat label="总量" value={o?.total} />
             <Stat label="额度估算" value={o?.quota_estimate} />
           </div>
+          <LayerCard className="mb-4">
+            <LayerCard.Secondary>号池健康趋势 · 最近 {patrolHistory.length} 次巡检</LayerCard.Secondary>
+            <LayerCard.Primary className="p-4">
+              {patrolSeries.length > 0 ? (
+                <TrendChart series={patrolSeries} height={260} valueFormat={(v) => `${v} 个账号`} />
+              ) : (
+                <Text variant="secondary">尚无巡检记录，执行一次轻检或深检后出现</Text>
+              )}
+              <div className="mt-3">
+                <Text size="xs" variant="secondary">
+                  仅保留最近 50 次巡检的原始记录；按天聚合的长期趋势见「数据分析」页。
+                </Text>
+              </div>
+            </LayerCard.Primary>
+          </LayerCard>
+
           <LayerCard className="mb-4">
             <LayerCard.Secondary>清理</LayerCard.Secondary>
             <LayerCard.Primary>

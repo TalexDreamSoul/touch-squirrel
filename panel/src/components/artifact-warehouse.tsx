@@ -23,6 +23,7 @@ import {
   Text,
 } from "@cloudflare/kumo";
 import { api, getToken, type ArtifactInfo } from "@/lib/api";
+import { formatDate, formatTime, useTimezone } from "@/lib/timezone";
 
 type ArtifactFacets = {
   plugins: string[];
@@ -105,13 +106,14 @@ function statusLabel(status: string) {
   }
 }
 
-function formatDate(value?: string) {
+/** 表格里日期与时间分两行显示，所以拆成 { date, time } 而不是直接用 formatDateTime。 */
+function formatDateParts(value: string | undefined, timezone: string) {
   if (!value) return { date: "—", time: "" };
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return { date: value, time: "" };
   return {
-    date: parsed.toLocaleDateString("zh-CN"),
-    time: parsed.toLocaleTimeString("zh-CN", { hour12: false }),
+    date: formatDate(parsed, timezone),
+    time: formatTime(parsed, timezone),
   };
 }
 
@@ -151,6 +153,7 @@ export function ArtifactWarehouse({
   initialQuery?: string;
   onQueryChange?: (query: string) => void;
 }) {
+  const { timezone } = useTimezone();
   const [data, setData] = useState<ArtifactsResponse | null>(null);
   const [plugin, setPlugin] = useState(ALL_PLUGIN);
   const [kind, setKind] = useState(ALL_KIND);
@@ -322,7 +325,7 @@ export function ArtifactWarehouse({
     }
   }
 
-  const detailTime = formatDate(detail?.created_at);
+  const detailTime = formatDateParts(detail?.created_at, timezone);
 
   return (
     <>
@@ -486,7 +489,7 @@ export function ArtifactWarehouse({
                 </Table.Header>
                 <Table.Body>
                   {rows.map((item, index) => {
-                    const time = formatDate(item.created_at);
+                    const time = formatDateParts(item.created_at, timezone);
                     return (
                       <Table.Row key={item.id}>
                         <Table.Cell>

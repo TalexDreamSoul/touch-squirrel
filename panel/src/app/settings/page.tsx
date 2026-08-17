@@ -26,6 +26,12 @@ import {
   type PluginRepository,
 } from "@/lib/api";
 import { useTheme, type ThemeMode } from "@/lib/theme";
+import {
+  COMMON_TIMEZONES,
+  formatDateTime,
+  timezoneOffsetLabel,
+  useTimezone,
+} from "@/lib/timezone";
 
 type TabKey = "general" | "plugins" | "register" | "email" | "pool" | "patrol" | "import";
 
@@ -54,6 +60,19 @@ function decodeInfrastructure(raw: string) {
   return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, string | number>;
 }
 
+/**
+ * 下拉项文案；未收录的时区（例如旧数据）直接显示 IANA 名称。
+ *
+ * `emptyLabel` is required because an empty value means different things in the
+ * two selects ("follow the browser" vs "follow the server"), and `renderValue`
+ * would otherwise paint the trigger blank instead of showing the placeholder.
+ */
+function timezoneOptionLabel(value: string, emptyLabel: string) {
+  if (!value) return emptyLabel;
+  const known = COMMON_TIMEZONES.find((option) => option.value === value);
+  return known ? `${known.label}（${timezoneOffsetLabel(value)}）` : value;
+}
+
 function snapshotOf(cfg: PanelConfig) {
   return JSON.stringify(
     Object.keys(cfg)
@@ -64,6 +83,8 @@ function snapshotOf(cfg: PanelConfig) {
 
 export default function SettingsPage() {
   const { theme, setTheme, resolved } = useTheme();
+  const { timezone, override: timezoneOverride, setOverride: setTimezoneOverride, browser: browserTimezone } =
+    useTimezone();
   const [tab, setTab] = useState<TabKey>("general");
   const [cfg, setCfg] = useState<PanelConfig>({});
   const [savedSnap, setSavedSnap] = useState("");
@@ -118,8 +139,9 @@ export default function SettingsPage() {
   const buildCommitLabel =
     buildCommit && buildCommit !== "unknown" ? buildCommit.slice(0, 12) : "未注入";
   const buildCommitTime = buildInfo?.commit_time
-    ? new Date(buildInfo.commit_time).toLocaleString("zh-CN", { hour12: false })
+    ? formatDateTime(buildInfo.commit_time, timezone)
     : "";
+  const serverTimezone = String(cfg.display_timezone || "");
 
   async function load() {
     const d = await api<{ config: PanelConfig }>("/api/config");
@@ -159,6 +181,7 @@ export default function SettingsPage() {
     setMsg("");
     try {
       const body: Record<string, string | number | boolean> = {
+        display_timezone: String(cfg.display_timezone || ""),
         cpa_management_base: String(cfg.cpa_management_base || ""),
         cpa_upload_enabled: !!cfg.cpa_upload_enabled,
         cpa_upload_timeout_sec: Number(cfg.cpa_upload_timeout_sec || 30),
@@ -485,6 +508,59 @@ export default function SettingsPage() {
           </LayerCard>
 
           <LayerCard>
+            <LayerCard.Secondary>时区</LayerCard.Secondary>
+            <LayerCard.Primary>
+              <div className="flex flex-col gap-3">
+                <Select
+                  label="显示时区"
+                  value={timezoneOverride}
+                  placeholder={`跟随浏览器（${browserTimezone}）`}
+                  renderValue={(value) =>
+                    timezoneOptionLabel(String(value), `跟随浏览器（${browserTimezone}）`)
+                  }
+                  onValueChange={(value) => setTimezoneOverride(value ?? "")}
+                >
+                  <Select.Option value="">
+                    跟随浏览器（{browserTimezone}）
+                  </Select.Option>
+                  {COMMON_TIMEZONES.map((option) => (
+                    <Select.Option key={option.value} value={option.value}>
+                      {timezoneOptionLabel(option.value, "")}
+                    </Select.Option>
+                  ))}
+                </Select>
+                <Text size="xs" variant="secondary">
+                  只影响当前浏览器上时间的展示方式，不会改变服务端存储的数据，也无需保存。
+                </Text>
+
+                <Select
+                  label="服务端默认时区"
+                  value={serverTimezone}
+                  placeholder="跟随服务器系统时区"
+                  renderValue={(value) =>
+                    timezoneOptionLabel(String(value), "跟随服务器系统时区")
+                  }
+                  onValueChange={(value) => setField("display_timezone", value ?? "")}
+                >
+                  <Select.Option value="">跟随服务器系统时区</Select.Option>
+                  {COMMON_TIMEZONES.map((option) => (
+                    <Select.Option key={option.value} value={option.value}>
+                      {timezoneOptionLabel(option.value, "")}
+                    </Select.Option>
+                  ))}
+                </Select>
+                <Text size="xs" variant="secondary">
+                  仅在客户端未指定时区时作为兜底，例如通知推送与服务端渲染的报表；改动后需要点「保存」。
+                </Text>
+
+                <Text size="xs" variant="secondary">
+                  当前生效：{timezone}（{timezoneOffsetLabel(timezone)}）
+                </Text>
+              </div>
+            </LayerCard.Primary>
+          </LayerCard>
+
+          <LayerCard>
             <LayerCard.Secondary>通知</LayerCard.Secondary>
             <LayerCard.Primary>
               <div className="flex flex-col gap-3">
@@ -636,7 +712,7 @@ export default function SettingsPage() {
                       </Text>
                       <Text size="xs" variant="secondary">
                         {repository.synced_at
-                          ? `上次同步：${new Date(repository.synced_at).toLocaleString("zh-CN")}`
+                          ? `上次同步：${formatDateTime(repository.synced_at, timezone)}`
                           : "尚未同步"}
                       </Text>
                       {repository.last_error ? (

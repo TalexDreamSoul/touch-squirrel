@@ -5,6 +5,7 @@ import { Badge, Button, Dialog, Input, LayerCard, Switch, Table, Text } from "@c
 import { AdminShell } from "@/components/admin-shell";
 import { PageHeader } from "@/components/page-header";
 import { api, getToken } from "@/lib/api";
+import { formatDateTime, useTimezone } from "@/lib/timezone";
 
 type UploadItem = {
   id: number;
@@ -63,13 +64,8 @@ function sourceLabel(source?: string) {
   return source;
 }
 
-function formatTime(value?: string) {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
-}
-
 export default function UploadPage() {
+  const { timezone } = useTimezone();
   const [jobs, setJobs] = useState<UploadJob[]>([]);
   const [files, setFiles] = useState<FileList | null>(null);
   const [concurrency, setConcurrency] = useState("");
@@ -101,6 +97,8 @@ export default function UploadPage() {
     () => jobs.find((job) => job.id === selectedID) || null,
     [jobs, selectedID],
   );
+
+  const formatWhen = (value?: string) => (value ? formatDateTime(value, timezone) : "—");
 
   function openCreate() {
     setFiles(null);
@@ -249,7 +247,7 @@ export default function UploadPage() {
                         <Text size="xs">每批 {job.options.batchSize}</Text>
                         <Text size="xs" variant="secondary">并发 {job.options.concurrency} · 重试 {job.options.retryLimit}</Text>
                       </Table.Cell>
-                      <Table.Cell><Text size="xs">{formatTime(job.createdAt)}</Text></Table.Cell>
+                      <Table.Cell><Text size="xs">{formatWhen(job.createdAt)}</Text></Table.Cell>
                       <Table.Cell>
                         <div className="flex flex-wrap gap-2">
                           <Button size="sm" variant="secondary" onClick={() => openDetail(job)}>详情</Button>
