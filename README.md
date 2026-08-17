@@ -127,6 +127,18 @@ cd touch-squirrel
 make up
 ```
 
+前后端联调使用开发脚本：Next.js 在 `3007` 提供热更新，Go Host 在 `8787` 提供 API；前端的 `/api/*` 和 `/mcp` 会自动代理到 Host。修改 Go 源码后 Host 会自动增量重建并重启。
+
+```bash
+make dev
+```
+
+按 `Ctrl-C` 同时停止两个进程。需要调整端口或数据目录时：
+
+```bash
+FRONTEND_PORT=3008 BACKEND_ADDR=127.0.0.1:8788 GROK_HOME="$PWD/.grok-home-dev" make dev
+```
+
 ```bash
 make status
 make down

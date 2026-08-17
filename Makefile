@@ -7,7 +7,7 @@ REPOSITORY?=https://github.com/TalexDreamSoul/touch-squirrel
 PREFIX?=/usr/local
 BINDIR=$(PREFIX)/bin
 
-.PHONY: help build install uninstall clean test npm-test npm-pack release-check run panel panel-ui up down status docker-up docker-down docker-rebuild
+.PHONY: help build install uninstall clean test npm-test npm-pack release-check run panel panel-ui dev up down status docker-up docker-down docker-rebuild
 
 # Resolve go even when sudo drops PATH (mise /usr/local / home installs).
 GO ?= $(shell command -v go 2>/dev/null || true)
@@ -31,6 +31,7 @@ help:
 	@echo "  make status          # 健康检查 / 容器状态"
 	@echo ""
 	@echo "开发:"
+	@echo "  make dev             # Next.js 热更新 + Go Host 自动重启"
 	@echo "  make panel-ui        # 构建 Next+Kumo → web/out"
 	@echo "  make build           # panel-ui + 编译 bin/squirrel"
 	@echo "  make panel           # 前台跑 panel（:8787）"
@@ -60,6 +61,9 @@ build:
 	@echo "[*] using $(GO)"
 	$(GO) build -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.commitTime=$(COMMIT_TIME) -X main.repository=$(REPOSITORY)" -o bin/$(APP) ./cmd/grok
 	@echo "[✓] bin/$(APP)"
+
+dev:
+	@./scripts/dev.sh
 
 # Next.js + Cloudflare Kumo → web/out (embedded by Go)
 panel-ui:

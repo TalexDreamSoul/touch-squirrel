@@ -5,7 +5,7 @@ const isExport = process.env.NEXT_OUTPUT === "export" || process.env.NODE_ENV ==
 
 const nextConfig: NextConfig = {
   // Static export → copied into web/ for Go embed (production)
-  output: "export",
+  ...(isExport ? { output: "export" } : {}),
   trailingSlash: true,
   images: { unoptimized: true },
   turbopack: {
@@ -13,10 +13,12 @@ const nextConfig: NextConfig = {
   },
 };
 
-// rewrites only apply in `next dev` (export ignores custom routes)
+// Rewrites are only used by `next dev`; production remains a static export.
 if (!isExport) {
-  // no-op: keep API_PROXY_TARGET documented for local next dev reverse-proxy setups
-  void apiTarget;
+  nextConfig.rewrites = async () => [
+    { source: "/api/:path*", destination: `${apiTarget}/api/:path*` },
+    { source: "/mcp", destination: `${apiTarget}/mcp` },
+  ];
 }
 
 export default nextConfig;

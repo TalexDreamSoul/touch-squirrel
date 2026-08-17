@@ -38,6 +38,7 @@ panel/*.tsbuildinfo
 *.log
 logs/
 data/
+.tmp/
 .grok-home/
 .grok-home-*/
 
