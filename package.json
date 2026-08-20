@@ -1,0 +1,17 @@
+{
+  "name": "touch-xai-register",
+  "version": "0.2.0",
+  "private": true,
+  "packageManager": "pnpm@10.34.4",
+  "workspaces": [
+    "panel"
+  ],
+  "scripts": {
+    "dev": "make dev",
+    "dev:ui": "pnpm --filter grok-panel dev",
+    "build": "make build",
+    "build:ui": "make panel-ui",
+    "lint": "pnpm --filter grok-panel lint",
+    "test": "make test"
+  }
+}
